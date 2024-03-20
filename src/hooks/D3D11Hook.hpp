@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <unordered_set> // :alex:
 
 #include <d3d11.h>
 #include <dxgi.h>
@@ -61,13 +62,17 @@ protected:
     std::unique_ptr<PointerHook> m_present_hook{};
     std::unique_ptr<PointerHook> m_resize_buffers_hook{};
     std::unique_ptr<PointerHook> m_set_render_targets_hook{};
+    static std::unique_ptr<PointerHook> m_create_pixel_shader_hook; // :alex:
     OnPresentFn m_on_present{ nullptr };
     OnPresentFn m_on_post_present{ nullptr };
     OnResizeBuffersFn m_on_resize_buffers{ nullptr };
     ComPtr<ID3D11Texture2D> m_last_depthstencil_used{};
 
+    // :alex:
+    static std::unordered_set<uint32_t> m_dumped_shaders;
+
     static HRESULT WINAPI present(IDXGISwapChain* swap_chain, UINT sync_interval, UINT flags);
     static HRESULT WINAPI resize_buffers(IDXGISwapChain* swap_chain, UINT buffer_count, UINT width, UINT height, DXGI_FORMAT new_format, UINT swap_chain_flags);
-    static void WINAPI set_render_targets(
-        ID3D11DeviceContext* context, UINT num_views, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv);
+    static void WINAPI set_render_targets(ID3D11DeviceContext* context, UINT num_views, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv);
+    static HRESULT WINAPI create_pixel_shader(ID3D11Device* device, const void* pShaderBytecode, uint64_t BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11PixelShader** ppPixelShader); // :alex:
 };

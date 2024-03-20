@@ -2,6 +2,7 @@
 #include <spdlog/spdlog.h>
 #include <utility/Thread.hpp>
 #include <utility/Module.hpp>
+#include <fstream> // :alex:
 
 #include <safetyhook/thread_freezer.hpp>
 
@@ -10,9 +11,15 @@
 
 #include "D3D11Hook.hpp"
 
+#include "shader/Shaders.h" // :alex:
+
 using namespace std;
 
 static D3D11Hook* g_d3d11_hook = nullptr;
+
+// :alex:
+std::unique_ptr<PointerHook> D3D11Hook::m_create_pixel_shader_hook; 
+std::unordered_set<uint32_t> D3D11Hook::m_dumped_shaders;
 
 D3D11Hook::~D3D11Hook() {
     unhook();
@@ -79,13 +86,19 @@ bool D3D11Hook::hook() {
     try {
         safetyhook::execute_while_frozen([&] {
             m_present_hook.reset();
-            m_resize_buffers_hook.reset();
+            m_resize_buffers_hook.reset();            
+            // m_create_pixel_shader_hook.reset(); // :alex: do not rehook shader hooks
 
             auto& present_fn = (*(void***)swap_chain)[8];
             auto& resize_buffers_fn = (*(void***)swap_chain)[13];
+            auto& create_pixel_shader_fn = (*(void***)device)[15]; // :alex:
 
             m_present_hook = std::make_unique<PointerHook>(&present_fn, (void*)&D3D11Hook::present);
             m_resize_buffers_hook = std::make_unique<PointerHook>(&resize_buffers_fn, (void*)&D3D11Hook::resize_buffers);
+            // :alex:
+            if (!m_create_pixel_shader_hook) {
+                m_create_pixel_shader_hook = std::make_unique<PointerHook>(&create_pixel_shader_fn, (void*)&D3D11Hook::create_pixel_shader);
+            }
 
             m_hooked = true;
         });
@@ -107,7 +120,8 @@ bool D3D11Hook::unhook() {
 
     spdlog::info("Unhooking D3D11");
 
-    if (m_present_hook->remove() && m_resize_buffers_hook->remove()) {
+    // :alex: leave shader hooks intact
+    if (m_present_hook->remove() && m_resize_buffers_hook->remove() /* && m_create_pixel_shader_hook->remove() */) {
         m_hooked = false;
         return true;
     }
@@ -296,4 +310,186 @@ void WINAPI D3D11Hook::set_render_targets(
     auto set_render_targets_fn = d3d11->m_set_render_targets_hook->get_original<decltype(set_render_targets)*>();
 
     return set_render_targets_fn(context, num_views, rtvs, dsv);
+}
+
+// :alex:
+// 64 bit magic FNV-0 and FNV-1 prime
+static const uint64_t FNV_64_PRIME = 0x100000001b3ULL;
+static uint64_t fnv_64_buf(const void* buf, size_t len) 
+{
+    uint64_t hval = 0u;
+    unsigned const char* bp = (unsigned const char*)buf; /* start of buffer */
+    unsigned const char* be = bp + len;                  /* beyond end of buffer */
+
+    // FNV-1 hash each octet of the buffer
+    while (bp < be) {
+        // multiply by the 64 bit FNV magic prime mod 2^64 */
+        hval *= FNV_64_PRIME;
+        // xor the bottom with the current octet
+        hval ^= (uint64_t)*bp++;
+    }
+    return hval;
+}
+
+// :alex:
+static UINT64 hash_shader(const void* pShaderBytecode, SIZE_T BytecodeLength) 
+{
+    uint64_t hash = fnv_64_buf(pShaderBytecode, BytecodeLength);
+    spdlog::info("       FNV hash = {:x}", hash);
+    return hash;
+}
+
+// :alex:
+static string BinaryToAsmText(const void* pShaderBytecode, size_t BytecodeLength, bool patch_cb_offsets, bool disassemble_undecipherable_data = true, int hexdump = 0, bool d3dcompiler_46_compat = true) 
+{
+    string comments;
+    vector<uint8_t> byteCode(BytecodeLength);
+    vector<uint8_t> disassembly;
+    HRESULT r;
+
+    memcpy(byteCode.data(), pShaderBytecode, BytecodeLength);
+
+    r = disassembler(&byteCode, &disassembly, comments.c_str(), hexdump, d3dcompiler_46_compat, disassemble_undecipherable_data, patch_cb_offsets);
+    if (FAILED(r)) {
+        spdlog::info("  disassembly failed. Error: {}", r);
+        return "";
+    }
+
+    return string(disassembly.begin(), disassembly.end());
+}
+
+// :alex:
+static string GetShaderModel(const void* pShaderBytecode, size_t bytecodeLength) 
+{
+    string asmText = BinaryToAsmText(pShaderBytecode, bytecodeLength, false);
+    if (asmText.empty())
+        return "";
+
+    // Read shader model. This is the first not commented line.
+    char* pos = (char*)asmText.data();
+    char* end = pos + asmText.size();
+    while ((pos[0] == '/' || pos[0] == '\n') && pos < end) {
+        while (pos[0] != 0x0a && pos < end)
+            pos++;
+        pos++;
+    }
+    // Extract model.
+    char* eol = pos;
+    while (eol[0] != 0x0a && pos < end)
+        eol++;
+    string shaderModel(pos, eol);
+
+    return shaderModel;
+}
+
+static std::filesystem::path getShaderPath(const uint64_t hash, const char* pShaderType, const std::string &subfolder)
+{
+    char path[MAX_PATH];
+    sprintf(path, "%016llx-%s.txt", hash, pShaderType);
+    return Framework::get_persistent_dir(subfolder) / path;
+}
+
+// :alex:
+static char *ReplaceASMShader(const uint64_t hash, const char* pShaderType, const void* pShaderBytecode, SIZE_T pBytecodeLength, SIZE_T& pCodeSize, string &pShaderModel) 
+{
+    char* pCode = nullptr;
+    const std::filesystem::path final_path = getShaderPath(hash, pShaderType, "shaders").string();
+
+    HANDLE f = CreateFile(final_path.string().c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    string shaderModel;
+    if (f != INVALID_HANDLE_VALUE) {
+        spdlog::info("    Replacement ASM shader found. Assembling replacement ASM code.");
+
+        DWORD srcDataSize = GetFileSize(f, 0);
+        vector<char> asmTextBytes(srcDataSize);
+        DWORD readSize;
+        if (!ReadFile(f, asmTextBytes.data(), srcDataSize, &readSize, 0) || srcDataSize != readSize)
+            spdlog::info("    Error reading file.");
+        CloseHandle(f);
+        spdlog::info("    Asm source code loaded. Size = {}", srcDataSize);
+
+        // Disassemble old shader to get shader model.
+        shaderModel = GetShaderModel(pShaderBytecode, pBytecodeLength);
+        if (shaderModel.empty()) {
+            spdlog::info("    disassembly of original shader failed.");
+        } else {
+            // Any ASM shaders are reloading candidates, if moved to ShaderFixes
+            pShaderModel = shaderModel;
+
+            vector<uint8_t> byteCode(pBytecodeLength);
+            memcpy(byteCode.data(), pShaderBytecode, pBytecodeLength);
+
+            // Re-assemble the ASM text back to binary
+            try {
+                vector<AssemblerParseError> parse_errors;
+                byteCode = AssembleFluganWithOptionalSignatureParsing(&asmTextBytes, true, &byteCode, &parse_errors);
+
+                // Assuming the re-assembly worked, let's make it the active shader code.
+                pCodeSize = byteCode.size();
+                pCode = new char[pCodeSize];
+                memcpy(pCode, byteCode.data(), pCodeSize);
+
+                // Cache binary replacement.
+                if (!parse_errors.empty()) {
+                    // Parse errors are currently being treated as non-fatal on
+                    // creation time replacement and ShaderRegex for backwards
+                    // compatibility (live shader reload is fatal).
+                    for (auto& parse_error : parse_errors)
+                        spdlog::warn("{}: {}\n", final_path.filename().string(), parse_error.what());
+                }
+            } catch (const exception& e) {
+                spdlog::warn("Error assembling {}: {}\n", final_path.filename().string(), e.what());
+            }
+        }
+    }
+
+    return pCode;
+}
+
+
+// :alex:
+HRESULT WINAPI D3D11Hook::create_pixel_shader(ID3D11Device* device, const void* pShaderBytecode, uint64_t BytecodeLength, ID3D11ClassLinkage* pClassLinkage, ID3D11PixelShader** ppPixelShader) 
+{
+    std::scoped_lock _{g_framework->get_hook_monitor_mutex()};
+
+    auto d3d11 = g_d3d11_hook;
+    auto create_pixel_shader_fn = d3d11->m_create_pixel_shader_hook->get_original<decltype(create_pixel_shader)*>();
+
+    if (!ppPixelShader || !pShaderBytecode) {
+        // Let DX worry about the error code
+        return create_pixel_shader_fn(device, pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
+    }
+
+	spdlog::info("D3D11Hook::create_pixel_shader called with BytecodeLength = {}", BytecodeLength);
+
+    // Calculate hash
+    uint64_t hash = hash_shader(pShaderBytecode, BytecodeLength);
+
+	// look for replacement ASM text shaders.
+    SIZE_T replaceShaderSize = 0;
+    string shaderModel;
+    char* replaceShader = ReplaceASMShader(hash, "ps", pShaderBytecode, BytecodeLength, replaceShaderSize, shaderModel);
+    if (!replaceShader) {
+        // dump unknown shader?
+        if (Framework::shader_dump_enabled() && (m_dumped_shaders.find(hash) == m_dumped_shaders.end()))
+        {
+            m_dumped_shaders.insert(hash);
+            const auto dumpPath = getShaderPath(hash, "ps", "dump");
+            if (!std::filesystem::exists(dumpPath))
+            {
+                fstream outfile(dumpPath.string(), std::ios_base::out);
+                outfile << BinaryToAsmText(pShaderBytecode, BytecodeLength, false);                
+            }
+        }
+        // create original shader
+        return create_pixel_shader_fn(device, pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
+    }
+
+    HRESULT hr = create_pixel_shader_fn(device, replaceShader, replaceShaderSize, pClassLinkage, ppPixelShader);
+    if (hr == S_OK) {
+        spdlog::info("    PS: hash = {:x}", hash);
+    }
+
+    spdlog::info("  returns result = {}", hr);
+    return hr;
 }

@@ -117,6 +117,11 @@ public:
         return get_persistent_dir() / dir;
     }
 
+    // :alex:
+    static bool shader_dump_enabled() {
+        return m_dump_shaders;
+    }
+
     void save_config();
     void reset_config();
 
@@ -331,6 +336,9 @@ private:
     bool m_sent_message{false};
     bool m_message_hook_requested{false};
     bool m_has_engine_thread{false};
+
+    // :alex:
+    static bool m_dump_shaders;    
 
     RendererType m_renderer_type{RendererType::D3D11};
 

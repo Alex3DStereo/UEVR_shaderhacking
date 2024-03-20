@@ -37,6 +37,9 @@ using namespace std::literals;
 
 std::unique_ptr<Framework> g_framework{};
 
+// :alex:
+bool Framework::m_dump_shaders = false;
+
 UEVRSharedMemory::UEVRSharedMemory() {
     spdlog::info("Shared memory constructor!");
 
@@ -245,6 +248,22 @@ Framework::Framework(HMODULE framework_module)
     /*if (!hook_d3d12()) {
         spdlog::error("Failed to hook D3D12 for initial test.");
     }*/
+
+    // :alex: dump shaders?
+    m_dump_shaders = std::filesystem::is_directory(get_persistent_dir("dump"));
+
+    // :alex: hook & unhook D3D11 with permanent shader hook to catch all early shader creations
+    if (!hook_d3d11()) {
+        spdlog::error("Failed to hook D3D11 for initial shader hook.");
+    } else {
+        if (m_d3d11_hook->unhook()) {
+            spdlog::info("D3D11 unhooked!");
+        } else {
+            spdlog::info("Cannot unhook D3D11, this might crash.");
+        }
+        m_valid = false;
+        m_is_d3d11 = false;
+    }
 
     std::scoped_lock _{m_hook_monitor_mutex};
     PluginLoader::get()->early_init();
