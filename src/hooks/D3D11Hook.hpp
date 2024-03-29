@@ -69,7 +69,7 @@ protected:
     ComPtr<ID3D11Texture2D> m_last_depthstencil_used{};
 
     // :alex:
-    static std::unordered_set<uint32_t> m_dumped_shaders;
+    static std::unordered_set<uint64_t> m_dumped_shaders;
 
     static HRESULT WINAPI present(IDXGISwapChain* swap_chain, UINT sync_interval, UINT flags);
     static HRESULT WINAPI resize_buffers(IDXGISwapChain* swap_chain, UINT buffer_count, UINT width, UINT height, DXGI_FORMAT new_format, UINT swap_chain_flags);

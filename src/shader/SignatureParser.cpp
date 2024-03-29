@@ -1,6 +1,8 @@
 #include "Shaders.h"
 #include <spdlog/spdlog.h>
 #include <Windows.h>
+#include <filesystem>
+#include "Framework.hpp"
 
 #define SFI_RAW_STRUCT_BUF (1LL<<1)
 #define SFI_MIN_PRECISION  (1LL<<4)
@@ -774,4 +776,98 @@ vector<uint8_t> AssembleFluganWithOptionalSignatureParsing(vector<char> *assembl
 		throw parseError;
 
 	return new_bytecode;
+}
+
+// :alex:
+// 64 bit magic FNV-0 and FNV-1 prime
+static const uint64_t FNV_64_PRIME = 0x100000001b3ULL;
+static uint64_t fnv_64_buf(const void* buf, size_t len) 
+{
+    uint64_t hval = 0u;
+    unsigned const char* bp = (unsigned const char*)buf; /* start of buffer */
+    unsigned const char* be = bp + len;                  /* beyond end of buffer */
+
+    // FNV-1 hash each octet of the buffer
+    while (bp < be) {
+        // multiply by the 64 bit FNV magic prime mod 2^64 */
+        hval *= FNV_64_PRIME;
+        // xor the bottom with the current octet
+        hval ^= (uint64_t)*bp++;
+    }
+    return hval;
+}
+
+// :alex:
+uint64_t hash_shader(const void* pShaderBytecode, uint64_t BytecodeLength) 
+{
+    uint64_t hash = fnv_64_buf(pShaderBytecode, BytecodeLength);
+    spdlog::info("       FNV hash = {:x}", hash);
+    return hash;
+}
+
+// :alex:
+std::string BinaryToAsmText(const void* pShaderBytecode, size_t BytecodeLength, int hexdump) 
+{
+    string comments;
+    vector<uint8_t> byteCode(BytecodeLength);
+    vector<uint8_t> disassembly;
+    HRESULT r;
+
+    memcpy(byteCode.data(), pShaderBytecode, BytecodeLength);
+
+    r = disassembler(&byteCode, &disassembly, comments.c_str(), hexdump);
+    if (FAILED(r)) {
+        spdlog::info("  disassembly failed. Error: {}", r);
+        return "";
+    }
+
+    return string(disassembly.begin(), disassembly.end());
+}
+
+// :alex:
+char *ReplaceASMShader(const uint64_t hash, const char* pShaderType, const void* pShaderBytecode, uint64_t pBytecodeLength, uint64_t& pCodeSize)
+{
+    char* pCode = nullptr;
+    const std::filesystem::path final_path = Framework::getShaderPath(hash, pShaderType, "shaders").string();
+
+    HANDLE f = CreateFile(final_path.string().c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    string shaderModel;
+    if (f != INVALID_HANDLE_VALUE) {
+        spdlog::info("    Replacement ASM shader found. Assembling replacement ASM code.");
+
+        DWORD srcDataSize = GetFileSize(f, 0);
+        vector<char> asmTextBytes(srcDataSize);
+        DWORD readSize;
+        if (!ReadFile(f, asmTextBytes.data(), srcDataSize, &readSize, 0) || srcDataSize != readSize)
+            spdlog::info("    Error reading file.");
+        CloseHandle(f);
+        spdlog::info("    Asm source code loaded. Size = {}", srcDataSize);
+
+        vector<uint8_t> byteCode(pBytecodeLength);
+        memcpy(byteCode.data(), pShaderBytecode, pBytecodeLength);
+
+        // Re-assemble the ASM text back to binary
+        try {
+            vector<AssemblerParseError> parse_errors;
+            byteCode = AssembleFluganWithOptionalSignatureParsing(&asmTextBytes, true, &byteCode, &parse_errors);
+
+            // Assuming the re-assembly worked, let's make it the active shader code.
+            pCodeSize = byteCode.size();
+            pCode = new char[pCodeSize];
+            memcpy(pCode, byteCode.data(), pCodeSize);
+
+            // Cache binary replacement.
+            if (!parse_errors.empty()) {
+                // Parse errors are currently being treated as non-fatal on
+                // creation time replacement and ShaderRegex for backwards
+                // compatibility (live shader reload is fatal).
+                for (auto& parse_error : parse_errors)
+                    spdlog::warn("{}: {}\n", final_path.filename().string(), parse_error.what());
+            }
+        } catch (const exception& e) {
+            spdlog::warn("Error assembling {}: {}\n", final_path.filename().string(), e.what());
+        }
+    }
+
+    return pCode;
 }

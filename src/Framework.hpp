@@ -117,6 +117,8 @@ public:
         return get_persistent_dir() / dir;
     }
 
+    static std::filesystem::path getShaderPath(uint64_t hash, const char* pShaderType, const std::string& subfolder); // :alex:
+
     // :alex:
     static bool shader_dump_enabled() {
         return m_dump_shaders;

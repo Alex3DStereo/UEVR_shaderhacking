@@ -122,6 +122,9 @@ protected:
     std::unique_ptr<PointerHook> m_present_hook{};
     std::unique_ptr<VtableHook> m_swapchain_hook{};
     //std::unique_ptr<FunctionHook> m_create_swap_chain_hook{};
+    std::unique_ptr<PointerHook> m_create_graphics_pipeline_state_hook; // :alex:
+    std::unique_ptr<PointerHook> m_create_pipeline_state_hook; // :alex:
+    std::unique_ptr<PointerHook> m_create_pipeline_library_hook; // :alex:
 
     OnPresentFn m_on_present{ nullptr };
     OnPresentFn m_on_post_present{ nullptr };
@@ -129,9 +132,15 @@ protected:
     OnResizeTargetFn m_on_resize_target{ nullptr };
     //OnCreateSwapChainFn m_on_create_swap_chain{ nullptr };
     
+    // :alex:
+    static std::unordered_set<uint64_t> m_dumped_shaders;
+
     static HRESULT WINAPI present(IDXGISwapChain3* swap_chain, UINT sync_interval, UINT flags);
     static HRESULT WINAPI resize_buffers(IDXGISwapChain3* swap_chain, UINT buffer_count, UINT width, UINT height, DXGI_FORMAT new_format, UINT swap_chain_flags);
     static HRESULT WINAPI resize_target(IDXGISwapChain3* swap_chain, const DXGI_MODE_DESC* new_target_parameters);
     //static HRESULT WINAPI create_swap_chain(IDXGIFactory4* factory, IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* p_fullscreen_desc, IDXGIOutput* p_restrict_to_output, IDXGISwapChain** swap_chain);
+    static HRESULT WINAPI create_graphics_pipeline_state(ID3D12Device4* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pDesc, REFIID riid, void** ppPipelineState); // :alex:
+    static HRESULT WINAPI create_pipeline_state(ID3D12Device4* device, const D3D12_PIPELINE_STATE_STREAM_DESC* pDesc, REFIID riid, void** ppPipelineState); // :alex:
+    static HRESULT WINAPI create_pipeline_library(ID3D12Device4* device, const void* pLibraryBlob, SIZE_T BlobLength, REFIID riid, void** ppPipelineLibrary); // :alex:
 };
 

@@ -71,16 +71,14 @@ struct token_operand
 };
 
 std::vector<std::string> stringToLines(const char* start, size_t size);
-int32_t disassembler(std::vector<uint8_t> *buffer, std::vector<uint8_t> *ret, const char *comment,
-		int hexdump = 0, bool d3dcompiler_46_compat = false,
-		bool disassemble_undecipherable_data = false,
-		bool patch_cb_offsets = false);
-int32_t disassemblerDX9(std::vector<uint8_t> *buffer, std::vector<uint8_t> *ret, const char *comment);
+int32_t disassembler(std::vector<uint8_t> *buffer, std::vector<uint8_t> *ret, const char *comment, int hexdump = 0);
 std::vector<uint8_t> assembler(std::vector<char> *asmFile, std::vector<uint8_t> origBytecode, std::vector<AssemblerParseError> *parse_errors = NULL);
-std::vector<uint8_t> assemblerDX9(std::vector<char> *asmFile);
 void writeLUT();
 int32_t AssembleFluganWithSignatureParsing(std::vector<char> *assembly, std::vector<uint8_t> *result_bytecode, std::vector<AssemblerParseError> *parse_errors = NULL);
 std::vector<uint8_t> AssembleFluganWithOptionalSignatureParsing(std::vector<char> *assembly, bool assemble_signatures, std::vector<uint8_t> *orig_bytecode, std::vector<AssemblerParseError> *parse_errors = NULL);
+uint64_t hash_shader(const void* pShaderBytecode, uint64_t BytecodeLength);
+std::string BinaryToAsmText(const void* pShaderBytecode, size_t BytecodeLength, int hexdump = 0);
+char *ReplaceASMShader(const uint64_t hash, const char* pShaderType, const void* pShaderBytecode, uint64_t pBytecodeLength, uint64_t& pCodeSize);
 
 #pragma pack(push, 1)
 

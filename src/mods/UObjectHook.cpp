@@ -223,6 +223,32 @@ void UObjectHook::add_new_object(sdk::UObjectBase* object) {
         }
     }
 
+    // :alex: disable dithering in materials. this is futile because the shaders have been compiled already.
+    /*
+    static const auto class_material = sdk::find_uobject<sdk::UClass>(L"Class /Script/Engine.Material");
+    static sdk::FProperty* ditherOpacityMask = nullptr;
+    static sdk::FProperty* ditheredLODTransition = nullptr;
+    // todo: FByteProperty "BlendMode"
+    if (class_material != nullptr)
+    {
+        ditherOpacityMask = class_material->find_property(L"DitherOpacityMask");
+        ditheredLODTransition = class_material->find_property(L"DitheredLODTransition");
+    }
+    if (class_material != nullptr && object->get_class()->is_a(class_material)) {
+        auto material_object = (sdk::UObject*)object;        
+        if (ditherOpacityMask != nullptr) {
+            SPDLOG_INFO("[UObjectHook] {:s} DitherOpacityMask", utility::narrow(m_meta_objects[object]->full_name));
+            auto boolprop = (sdk::FBoolProperty*)ditherOpacityMask;
+            boolprop->set_value_in_object(material_object, false);
+        }
+        if (ditheredLODTransition != nullptr) {
+            SPDLOG_INFO("[UObjectHook] {:s} DitheredLODTransition", utility::narrow(m_meta_objects[object]->full_name));
+            auto boolprop = (sdk::FBoolProperty*)ditheredLODTransition;
+            boolprop->set_value_in_object(material_object, false);        
+        }
+    }
+    */
+
 #ifdef VERBOSE_UOBJECTHOOK
     SPDLOG_INFO("Adding object {:x} {:s}", (uintptr_t)object, utility::narrow(m_meta_objects[object]->full_name));
 #endif

@@ -2041,3 +2041,11 @@ bool Framework::is_advanced_view_enabled() const {
 Framework::ImGuiThemes Framework::get_imgui_theme_value() const {
     return static_cast<ImGuiThemes>(FrameworkConfig::get()->get_imgui_theme_value());
 }
+
+// :alex:
+std::filesystem::path Framework::getShaderPath(const uint64_t hash, const char* pShaderType, const std::string& subfolder)
+{
+    char path[MAX_PATH];
+    sprintf(path, "%016llx-%s.txt", hash, pShaderType);
+    return Framework::get_persistent_dir(subfolder) / path;
+}
