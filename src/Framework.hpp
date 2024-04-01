@@ -11,6 +11,11 @@
 #include <sdk/Math.hpp>
 #include <utility/Patch.hpp>
 
+// :alex:
+#define PCRE2_STATIC
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2/pcre2.h>
+
 #include <sdk/threading/ThreadWorker.hpp>
 #include <mods/vr/d3d12/CommandContext.hpp>
 
@@ -63,6 +68,14 @@ struct SidebarEntryInfo {
 
     std::string m_label{};
     bool m_advanced_entry{false};
+};
+
+// :alex: 
+struct ShaderRegEx
+{
+    std::string m_search;
+    pcre2_code* m_regex;
+    std::string m_replacement;
 };
 
 // Global facilitator
@@ -118,6 +131,11 @@ public:
     }
 
     static std::filesystem::path getShaderPath(uint64_t hash, const char* pShaderType, const std::string& subfolder); // :alex:
+
+    // :alex:
+    static std::unordered_set<uint64_t> m_dumped_shaders;
+    static std::unordered_set<uint64_t> m_regex_failed_shaders;
+    static std::list<ShaderRegEx> m_regex_ps;
 
     // :alex:
     static bool shader_dump_enabled() {
@@ -340,7 +358,7 @@ private:
     bool m_has_engine_thread{false};
 
     // :alex:
-    static bool m_dump_shaders;    
+    static bool m_dump_shaders;
 
     RendererType m_renderer_type{RendererType::D3D11};
 

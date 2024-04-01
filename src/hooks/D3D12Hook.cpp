@@ -18,9 +18,6 @@
 
 static D3D12Hook* g_d3d12_hook = nullptr;
 
-// :alex:
-std::unordered_set<uint64_t> D3D12Hook::m_dumped_shaders;
-
 D3D12Hook::~D3D12Hook() {
     unhook();
 }
@@ -352,7 +349,8 @@ bool D3D12Hook::unhook() {
         return true;
     }
 
-    spdlog::info("Unhooking D3D12");
+    // :alex: log will crash in destructor call
+    // spdlog::info("Unhooking D3D12");
 
     m_present_hook.reset();
     m_swapchain_hook.reset();
@@ -699,12 +697,11 @@ HRESULT WINAPI D3D12Hook::create_graphics_pipeline_state(ID3D12Device4* device, 
     uint64_t hash = hash_shader(pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength);
 
     // look for replacement ASM text shaders.
-    SIZE_T replaceShaderSize = 0;
-    char* replaceShader = ReplaceASMShader(hash, "ps", pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength, replaceShaderSize);
-    if (!replaceShader) {
+    std::vector<uint8_t> replacementShader = ReplaceASMShader(hash, "ps", pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength);
+    if (replacementShader.empty()) {
         // dump unknown shader?
-        if (Framework::shader_dump_enabled() && (m_dumped_shaders.find(hash) == m_dumped_shaders.end())) {
-            m_dumped_shaders.insert(hash);
+        if (Framework::shader_dump_enabled() && (Framework::m_dumped_shaders.find(hash) == Framework::m_dumped_shaders.end())) {
+            Framework::m_dumped_shaders.insert(hash);
             const auto dumpPath = Framework::getShaderPath(hash, "ps", "dump");
             if (!std::filesystem::exists(dumpPath)) {
                 std::fstream outfile(dumpPath.string(), std::ios_base::out);
@@ -715,14 +712,10 @@ HRESULT WINAPI D3D12Hook::create_graphics_pipeline_state(ID3D12Device4* device, 
         return create_graphics_pipeline_state_fn(device, pDesc, riid, ppPipelineState);
     }
 
-    const void* const origShaderBytecode = pDesc->PS.pShaderBytecode;
-    const uint64_t origShaderSize = pDesc->PS.BytecodeLength;
-    const_cast<D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(pDesc)->PS.pShaderBytecode = replaceShader;
-    const_cast<D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(pDesc)->PS.BytecodeLength = replaceShaderSize;
-    HRESULT hr = create_graphics_pipeline_state_fn(device, pDesc, riid, ppPipelineState);
-    const_cast<D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(pDesc)->PS.pShaderBytecode = origShaderBytecode;
-    const_cast<D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(pDesc)->PS.BytecodeLength = origShaderSize;
-    delete replaceShader;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC patchedDescription = *pDesc;
+    patchedDescription.PS.pShaderBytecode = replacementShader.data();
+    patchedDescription.PS.BytecodeLength = replacementShader.size();
+    HRESULT hr = create_graphics_pipeline_state_fn(device, &patchedDescription, riid, ppPipelineState);
     if (hr == S_OK) {
         spdlog::info("    PS: hash = {:x}", hash);
     }
@@ -743,22 +736,20 @@ HRESULT WINAPI D3D12Hook::create_pipeline_state(ID3D12Device4* device, const D3D
     std::scoped_lock _{g_framework->get_hook_monitor_mutex()};
     spdlog::info("D3D12Hook::create_pipeline_state called");
 
+    std::list<std::vector<uint8_t>> replacementShaders;
+    std::vector<uint8_t*> patchedStream(pDesc->SizeInBytes);
+    memcpy(patchedStream.data(), pDesc->pPipelineStateSubobjectStream, pDesc->SizeInBytes);
+    D3D12_PIPELINE_STATE_STREAM_DESC patchedDescription = *pDesc;
+    patchedDescription.pPipelineStateSubobjectStream = patchedStream.data();
+
     uint64_t pos = 0;
-    uint8_t* const data = (uint8_t* const)pDesc->pPipelineStateSubobjectStream;
-    const void** pixelShaderPtr = nullptr;
-    uint64_t* pixelShaderSizePtr = 0ULL;
-    const void* origPixelShader = nullptr;
-    uint64_t origPixelShaderSize = 0ULL;
+    uint8_t* const data = (uint8_t* const)patchedStream.data();
     uint64_t pixelShaderHash = 0ULL;
     while (pos < pDesc->SizeInBytes) {
         D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = *(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE*)(data + pos);
-//        spdlog::info(" type = {:x},{:x},{:x},{:x} {:x},{:x},{:x},{:x}", data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-//            data[pos + 4], data[pos + 5], data[pos + 6], data[pos+7]);
         pos += 4;
-//        spdlog::info("type={}", type);
         switch (type) {
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE:
-//            spdlog::info("D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE");
             pos += 8;
             break;
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
@@ -769,26 +760,24 @@ HRESULT WINAPI D3D12Hook::create_pipeline_state(ID3D12Device4* device, const D3D
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS:
             pos += sizeof(D3D12_SHADER_BYTECODE);
-//            spdlog::info("D3D12_SHADER_BYTECODE");
             break;
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS: {
             D3D12_SHADER_BYTECODE* desc_shader = (D3D12_SHADER_BYTECODE*)(data + pos + 4);
             spdlog::info("D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS ver={}, ptr={:x}, size={}", *(uint32_t*)(data+pos), (uint64_t)desc_shader->pShaderBytecode, desc_shader->BytecodeLength);
-            pos += sizeof(D3D12_SHADER_BYTECODE) + 4;        
-
-            //spdlog::info(" PS1 = {:x},{:x},{:x},{:x} {:x},{:x},{:x},{:x}", data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-            //    data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]);
-            //spdlog::info(" PS2 = {:x},{:x},{:x},{:x} {:x},{:x},{:x},{:x}", data[pos+8], data[pos + 9], data[pos + 10], data[pos + 11],
-            //    data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15]);
-            
+            pos += sizeof(D3D12_SHADER_BYTECODE) + 4;                    
             if (desc_shader->pShaderBytecode != nullptr) {
                 pixelShaderHash = hash_shader(desc_shader->pShaderBytecode, desc_shader->BytecodeLength);
-                SIZE_T replacementShaderSize = 0;
-                char* replacementShader = ReplaceASMShader(pixelShaderHash, "ps", desc_shader->pShaderBytecode, desc_shader->BytecodeLength, replacementShaderSize); 
-                if (!replacementShader) {
+                // dump shader
+                //const auto dumpBin = Framework::getShaderPath(pixelShaderHash, "psbin", "dump");
+                //if (!std::filesystem::exists(dumpBin)) {
+                //    std::fstream outfile(dumpBin.string(), std::ios_base::out | std::ios_base::binary);
+                //    outfile.write((const char*)desc_shader->pShaderBytecode, desc_shader->BytecodeLength);
+                //}
+                std::vector<uint8_t> replacementShader = ReplaceASMShader(pixelShaderHash, "ps", desc_shader->pShaderBytecode, desc_shader->BytecodeLength); 
+                if (replacementShader.empty()) {
                     // dump unknown shader?
-                    if (Framework::shader_dump_enabled() && (m_dumped_shaders.find(pixelShaderHash) == m_dumped_shaders.end())) {
-                        m_dumped_shaders.insert(pixelShaderHash);
+                    if (Framework::shader_dump_enabled() && (Framework::m_dumped_shaders.find(pixelShaderHash) == Framework::m_dumped_shaders.end())) {
+                        Framework::m_dumped_shaders.insert(pixelShaderHash);
                         const auto dumpPath = Framework::getShaderPath(pixelShaderHash, "ps", "dump");
                         if (!std::filesystem::exists(dumpPath)) {
                             std::fstream outfile(dumpPath.string(), std::ios_base::out | std::ios_base::binary);
@@ -798,12 +787,9 @@ HRESULT WINAPI D3D12Hook::create_pipeline_state(ID3D12Device4* device, const D3D
                 }
                 else
                 {
-                    origPixelShaderSize = desc_shader->BytecodeLength;
-                    origPixelShader = desc_shader->pShaderBytecode;
-                    pixelShaderSizePtr = &desc_shader->BytecodeLength;
-                    pixelShaderPtr = &desc_shader->pShaderBytecode;
-                    desc_shader->pShaderBytecode = replacementShader;
-                    desc_shader->BytecodeLength = replacementShaderSize;
+                    auto &data = replacementShaders.emplace_back(std::move(replacementShader));
+                    desc_shader->pShaderBytecode = data.data();
+                    desc_shader->BytecodeLength = data.size();
                 }
             }
             break;
@@ -857,18 +843,13 @@ HRESULT WINAPI D3D12Hook::create_pipeline_state(ID3D12Device4* device, const D3D
             pos += sizeof(D3D12_VIEW_INSTANCING_DESC);
             break;
         default:
-            spdlog::error("Unknown pipeline state subobject {}", type);
+            spdlog::warn("Unknown pipeline state subobject {}", type);
             pos += 0x100000000ULL;
         }
         pos += (0x08ULL - (pos & 0x07ULL)) & 0x07ULL;
     }
 
-    HRESULT hr = create_pipeline_state_fn(device, pDesc, riid, ppPipelineState);
-    if (pixelShaderPtr != nullptr) {
-        delete *pixelShaderPtr;
-        *pixelShaderPtr = origPixelShader;
-        *pixelShaderSizePtr = origPixelShaderSize;
-    }
+    HRESULT hr = create_pipeline_state_fn(device, &patchedDescription, riid, ppPipelineState);
 
     spdlog::info("  returns result = {}", hr);
     return hr;

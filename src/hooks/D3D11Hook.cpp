@@ -19,7 +19,6 @@ static D3D11Hook* g_d3d11_hook = nullptr;
 
 // :alex:
 std::unique_ptr<PointerHook> D3D11Hook::m_create_pixel_shader_hook; 
-std::unordered_set<uint64_t> D3D11Hook::m_dumped_shaders;
 
 D3D11Hook::~D3D11Hook() {
     unhook();
@@ -331,16 +330,13 @@ HRESULT WINAPI D3D11Hook::create_pixel_shader(ID3D11Device* device, const void* 
     uint64_t hash = hash_shader(pShaderBytecode, BytecodeLength);
 
 	// look for replacement ASM text shaders.
-    SIZE_T replaceShaderSize = 0;
-    char* replaceShader = ReplaceASMShader(hash, "ps", pShaderBytecode, BytecodeLength, replaceShaderSize);
-    if (!replaceShader) {
+    std::vector<uint8_t> replaceShader = ReplaceASMShader(hash, "ps", pShaderBytecode, BytecodeLength);
+    if (replaceShader.empty()) {
         // dump unknown shader?
-        if (Framework::shader_dump_enabled() && (m_dumped_shaders.find(hash) == m_dumped_shaders.end()))
-        {
-            m_dumped_shaders.insert(hash);
+        if (Framework::shader_dump_enabled() && (Framework::m_dumped_shaders.find(hash) == Framework::m_dumped_shaders.end())) {
+            Framework::m_dumped_shaders.insert(hash);
             const auto dumpPath = Framework::getShaderPath(hash, "ps", "dump");
-            if (!std::filesystem::exists(dumpPath))
-            {
+            if (!std::filesystem::exists(dumpPath)) {
                 fstream outfile(dumpPath.string(), std::ios_base::out);
                 outfile << BinaryToAsmText(pShaderBytecode, BytecodeLength, false);                
             }
@@ -349,8 +345,7 @@ HRESULT WINAPI D3D11Hook::create_pixel_shader(ID3D11Device* device, const void* 
         return create_pixel_shader_fn(device, pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
     }
 
-    HRESULT hr = create_pixel_shader_fn(device, replaceShader, replaceShaderSize, pClassLinkage, ppPixelShader);
-    delete replaceShader;
+    HRESULT hr = create_pixel_shader_fn(device, replaceShader.data(), replaceShader.size(), pClassLinkage, ppPixelShader);
     if (hr == S_OK) {
         spdlog::info("    PS: hash = {:x}", hash);
     }

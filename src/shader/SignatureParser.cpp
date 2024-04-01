@@ -2,6 +2,7 @@
 #include <spdlog/spdlog.h>
 #include <Windows.h>
 #include <filesystem>
+#include <fstream>
 #include "Framework.hpp"
 
 #define SFI_RAW_STRUCT_BUF (1LL<<1)
@@ -16,31 +17,31 @@ using namespace std;
 // VS2013 BUG WORKAROUND: Make sure this class has a unique type name!
 class AsmSignatureParseError : public std::exception {} parseError;
 
-static string next_line(string *shader, size_t *pos)
+static string next_line(const std::string &shader, size_t &pos)
 {
-	size_t start_pos = *pos;
+	size_t start_pos = pos;
 	size_t end_pos;
 
 	// Skip preceeding whitespace:
-	start_pos = shader->find_first_not_of(" \t\r", start_pos);
+	start_pos = shader.find_first_not_of(" \t\r", start_pos);
 
 	// Blank line at end of file:
-	if (start_pos == shader->npos) {
-		*pos = shader->npos;
+	if (start_pos == std::string::npos) {
+		pos = std::string::npos;
 		return "";
 	}
 
 	// Find newline, update parent pointer:
-	*pos = shader->find('\n', start_pos);
+	pos = shader.find('\n', start_pos);
 
 	// Skip trailing whitespace (will pad it later during parsing, but
 	// can't rely on whitespace here so still strip it):
-	end_pos = shader->find_last_not_of(" \t\n\r", *pos) + 1;
+	end_pos = shader.find_last_not_of(" \t\n\r", pos) + 1;
 
-	if (*pos != shader->npos)
-		(*pos)++; // Brackets are important
+	if (pos != std::string::npos)
+		++pos;
 
-	return shader->substr(start_pos, end_pos - start_pos);
+	return shader.substr(start_pos, end_pos - start_pos);
 }
 
 struct format_type {
@@ -185,14 +186,13 @@ static uint32_t pad(uint32_t size, uint32_t multiple)
 	return (multiple - size % multiple) % multiple;
 }
 
-static void* serialise_signature_section(const char *section24, const char *section28, const char *section32, int entry_size, vector<struct sgn_entry_unserialised> *entries, uint32_t name_len)
+static std::vector<uint8_t> serialise_signature_section(const char *section24, const char *section28, const char *section32, int entry_size, const std::list<sgn_entry_unserialised> &entries, uint32_t name_len)
 {
-	void *section;
 	uint32_t section_size, padding, alloc_size, name_off;
 	char *name_ptr = NULL;
 	void *padding_ptr = NULL;
-	struct section_header *section_header = NULL;
-	struct sgn_header *sgn_header = NULL;
+	section_header *sectionHeader{};
+	sgn_header *sgn_header = NULL;
 	sgn_entry_serialiased *entryn = NULL;
 	sg5_entry_serialiased *entry5 = NULL;
 	sg1_entry_serialiased *entry1 = NULL;
@@ -206,23 +206,16 @@ static void* serialise_signature_section(const char *section24, const char *sect
 		entry_size = 32;
 
 	// Calculate various offsets and sizes:
-	name_off = (uint32_t)(sizeof(struct sgn_header) + (entry_size * entries->size()));
+	name_off = (uint32_t)(sizeof(sgn_header) + (entry_size * entries.size()));
 	section_size = name_off + name_len;
 	padding = pad(section_size, 4);
-	alloc_size = section_size + sizeof(struct section_header) + padding;
+	std::vector<uint8_t> section(section_size + sizeof(section_header) + padding);
 
 	// LogDebug("name_off: %u, name_len: %u, section_size: %u, padding: %u, alloc_size: %u\n",	name_off, name_len, section_size, padding, alloc_size);
 
-	// Allocate entire section, including room for section header and padding:
-	section = malloc(alloc_size);
-	if (!section) {
-        spdlog::error("Out of memory");
-		return NULL;
-	}
-
 	// Pointers to useful data structures and offsets in the buffer:
-	section_header = (struct section_header*)section;
-	sgn_header = (struct sgn_header*)((char*)section_header + sizeof(struct section_header));
+	sectionHeader = (section_header*)section.data();
+	sgn_header = (struct sgn_header*)((char*)sectionHeader + sizeof(section_header));
 	padding_ptr = (void*)((char*)sgn_header + section_size);
 	// Only one of these will be used as the base address depending on the
 	// structure version, but pointers to the older versions will also be
@@ -235,24 +228,24 @@ static void* serialise_signature_section(const char *section24, const char *sect
 
 	switch (entry_size) {
 		case 24:
-			memcpy(&section_header->signature, section24, 4);
+			memcpy(&sectionHeader->signature, section24, 4);
 			break;
 		case 28:
-			memcpy(&section_header->signature, section28, 4);
+			memcpy(&sectionHeader->signature, section28, 4);
 			break;
 		case 32:
-			memcpy(&section_header->signature, section32, 4);
+			memcpy(&sectionHeader->signature, section32, 4);
 			break;
 		default:
 			throw parseError;
 	}
-	section_header->size = section_size + padding;
+	sectionHeader->size = section_size + padding;
 
-	sgn_header->num_entries = (uint32_t)entries->size();
+	sgn_header->num_entries = (uint32_t)entries.size();
 	sgn_header->unknown = sizeof(struct sgn_header); // Not confirmed, but seems likely. Always 8
 
 	// Fill out entries:
-	for (struct sgn_entry_unserialised const &unserialised : *entries) {
+	for (auto &unserialised : entries) {
 		switch (entry_size) {
 			case 32:
 				entry1->min_precision = unserialised.min_precision;
@@ -278,10 +271,10 @@ static void* serialise_signature_section(const char *section24, const char *sect
 	return section;
 }
 
-static void* parse_signature_section(const char *section24, const char *section28, const char *section32, string *shader, size_t *pos, bool invert_used, uint64_t sfi)
+static std::vector<uint8_t> parse_signature_section(const char *section24, const char *section28, const char *section32, const std::string &shader, size_t &pos, bool invert_used, uint64_t sfi)
 {
 	string line;
-	size_t old_pos = *pos;
+	size_t old_pos = pos;
 	int numRead;
 	uint32_t name_off = 0;
 	int entry_size = 24; // We use the size, because in MS's usual wisdom version 1 is higher than version 5 :facepalm:
@@ -291,14 +284,14 @@ static void* parse_signature_section(const char *section24, const char *section2
 	char reg[16]; // More than long enough for even "oStencilRef"
 	char mask[8], used[8]; // We read 7 characters - check the reason below
 	char format[16]; // Long enough for even "unknown"
-	vector<struct sgn_entry_unserialised> entries;
-	struct sgn_entry_unserialised entry;
+	std::list<sgn_entry_unserialised> entries;
+	sgn_entry_unserialised entry;
 
 	// If minimum precision formats are in use we bump the section versions:
 	if (sfi & SFI_MIN_PRECISION)
 		entry_size = max(entry_size, 32);
 
-	while (*pos != shader->npos) {
+	while (pos != std::string::npos) {
 		line = next_line(shader, pos);
 
 		// LogDebug("%s\n", line.c_str());
@@ -376,25 +369,18 @@ static void* parse_signature_section(const char *section24, const char *section2
 		entry.common.zero = 0;
 
 		// Check if a previous entry used the same semantic name
-		for (struct sgn_entry_unserialised const &prev_entry : entries) {
-			if (prev_entry.name == entry.name) {
-				entry.name_offset = prev_entry.name_offset;
-				// Why do so few languages have a for else
-				// construct? It is incredibly useful, yet
-				// pretty much only Python has it! Using a
-				// regular for loop I can fake it by checking
-				// the final value of the iterator, but here
-				// I'm using for each and the iterator will be
-				// out of scope, so I'd have to use another
-				// "found" variable instead. Screw it, I'm
-				// using goto to pretend I have it here too:
-				goto name_already_used;
+        auto i = entries.begin();
+        while (i != entries.end()) {
+            if (i->name == entry.name) {
+                entry.name_offset = i->name_offset;
+                break;
 			}
-		} // else { ;-)
-			entry.name_offset = name_off;
-			name_off += (uint32_t)entry.name.size() + 1;
-		// }
-name_already_used:
+            ++i;
+		}
+        if (i == entries.end()) {
+            entry.name_offset = name_off;
+            name_off += (uint32_t)entry.name.size() + 1;
+        }
 
 		//LogDebug("Stream: %i, Name: %s, Index: %i, Mask: 0x%x, Register: %i, SysValue: %i, Format: %i, Used: 0x%x, Precision: %i\n",
 		//		entry.stream, entry.name.c_str(),
@@ -403,40 +389,36 @@ name_already_used:
 		//		entry.common.format, entry.common.used,
 		//		entry.min_precision);
 
-		entries.push_back(entry);
-		old_pos = *pos;
+		entries.emplace_back(std::move(entry));
+		old_pos = pos;
 	}
 	// Wind the pos pointer back to the start of the line in case it is
 	// another section that the caller will need to parse:
-	*pos = old_pos;
+	pos = old_pos;
 
-	return serialise_signature_section(section24, section28, section32, entry_size, &entries, name_off);
+	return serialise_signature_section(section24, section28, section32, entry_size, entries, name_off);
 }
 
-static void* serialise_subshader_feature_info_section(uint64_t flags)
+static std::vector<uint8_t> serialise_subshader_feature_info_section(uint64_t flags)
 {
-	void *section;
-	struct section_header *section_header = NULL;
+    std::vector<uint8_t> section;
 	const uint32_t section_size = 8;
-	const uint32_t alloc_size = sizeof(struct section_header) + section_size;
+	const uint32_t alloc_size = sizeof(section_header) + section_size;
 	uint64_t *flags_ptr = NULL;
 
-	if (!flags)
-		return NULL;
-
-	// Allocate entire section, including room for section header and padding:
-	section = malloc(alloc_size);
-	if (!section) {
-        spdlog::error("Out of memory");
-		return NULL;
+	if (!flags) {
+        return section;
 	}
 
-	// Pointers to useful data structures and offsets in the buffer:
-	section_header = (struct section_header*)section;
-	memcpy(section_header->signature, "SFI0", 4);
-	section_header->size = section_size;
+	// Allocate entire section, including room for section header and padding:
+    section.resize(alloc_size);
 
-	flags_ptr = (uint64_t *)((char*)section_header + sizeof(struct section_header));
+	// Pointers to useful data structures and offsets in the buffer:
+    section_header* sectionHeader = (section_header*)section.data();
+	memcpy(sectionHeader->signature, "SFI0", 4);
+	sectionHeader->size = section_size;
+
+	flags_ptr = (uint64_t *)((char*)sectionHeader + sizeof(section_header));
 	*flags_ptr = flags;
 
 	return section;
@@ -492,16 +474,16 @@ static string subshader_feature_comments[] = {
 // Parses the globalFlags in the bytecode to derive Subshader Feature Info.
 // This is incomplete, as some of the SFI flags are not in globalFlags, but
 // must be found from the "shader requires" comment block instead.
-uint64_t parse_global_flags_to_sfi(string *shader)
+uint64_t parse_global_flags_to_sfi(const std::string &shader)
 {
 	uint64_t sfi = 0LL;
 	string line;
 	size_t pos = 0, gf_pos = 16;
 	int i;
 
-	while (pos != shader->npos) {
-		line = next_line(shader, &pos);
-		if (!strncmp(line.c_str(), "dcl_globalFlags ", 16)) {
+	while (pos != std::string::npos) {
+		line = next_line(shader, pos);
+        if (line.starts_with("dcl_globalFlags ")) {
 			// LogDebug("%s\n", line.c_str());
 			while (gf_pos != string::npos) {
 				for (i = 0; i < ARRAYSIZE(global_flag_sfi_map); i++) {
@@ -524,13 +506,13 @@ uint64_t parse_global_flags_to_sfi(string *shader)
 
 // Parses the SFI comment block. This is not complete, as some of the flags
 // come from globalFlags instead of / as well as this.
-static uint64_t parse_subshader_feature_info_comment(string *shader, size_t *pos, uint64_t flags)
+static uint64_t parse_subshader_feature_info_comment(const std::string &shader, size_t &pos, uint64_t flags)
 {
 	string line;
-	size_t old_pos = *pos;
+	size_t old_pos = pos;
 	uint32_t i;
 
-	while (*pos != shader->npos) {
+	while (pos != std::string::npos) {
 		line = next_line(shader, pos);
 
 		// LogDebug("%s\n", line.c_str());
@@ -548,234 +530,179 @@ static uint64_t parse_subshader_feature_info_comment(string *shader, size_t *pos
 
 	// Wind the pos pointer back to the start of the line in case it is
 	// another section that the caller will need to parse:
-	*pos = old_pos;
+	pos = old_pos;
 
 	return flags;
 }
 
-static void* manufacture_empty_section(const char *section_name)
+static std::vector<uint8_t> manufacture_empty_section(const char* section_name) 
 {
-	void *section;
-
+    std::vector<uint8_t> section(8);
 	spdlog::info("Manufacturing placeholder {} section...", section_name);
-
-	section = malloc(8);
-	if (!section) {
-        spdlog::error("Out of memory");
-		return NULL;
-	}
-
-	memcpy(section, section_name, 4);
-	memset((char*)section + 4, 0, 4);
-
+	memcpy(section.data(), section_name, 4);
 	return section;
 }
 
-static bool is_hull_shader(string *shader, size_t start_pos) {
-	string line;
+static bool is_hull_shader(const std::string &shader, size_t start_pos) {
 	size_t pos = start_pos;
 
-	while (pos != shader->npos) {
-		line = next_line(shader, &pos);
-		if (!strncmp(line.c_str(), "hs_4_", 5))
+	while (pos != std::string::npos) {
+		string line = next_line(shader, pos);
+		if (line.starts_with("hs_4_"))
 			return true;
-		if (!strncmp(line.c_str(), "hs_5_", 5))
+		if (line.starts_with("hs_5_"))
 			return true;
-		if (!strncmp(line.c_str() + 1, "s_4_", 4))
+		if (line.compare(1, 4, "s_4_") == 0)
 			return false;
-		if (!strncmp(line.c_str() + 1, "s_5_", 4))
+		if (line.compare(1, 4, "s_5_") == 0)
 			return false;
 	}
 
 	return false;
 }
 
-static bool is_geometry_shader_5(string *shader, size_t start_pos) {
-	string line;
+static bool is_geometry_shader_5(const string &shader, size_t start_pos) {
 	size_t pos = start_pos;
 
-	while (pos != shader->npos) {
-		line = next_line(shader, &pos);
-		if (!strncmp(line.c_str(), "gs_5_", 5))
+	while (pos != std::string::npos) {
+		string line = next_line(shader, pos);
+		if (line.starts_with("gs_5_"))
 			return true;
-		if (!strncmp(line.c_str() + 1, "s_4_", 4))
+		if (line.compare(1, 4, "s_4_") == 0)
 			return false;
-		if (!strncmp(line.c_str() + 1, "s_5_", 4))
+		if (line.compare(1, 4, "s_5_") == 0)
 			return false;
 	}
 
 	return false;
 }
 
-static bool parse_section(string *line, string *shader, size_t *pos, void **section, uint64_t *sfi, bool *force_shex)
+static std::vector<uint8_t> parse_section(const std::string &line, const std::string &shader, size_t &pos, uint64_t &sfi, bool force_shex, bool &done)
 {
-	*section = NULL;
-
-	if (!strncmp(line->c_str() + 1, "s_4_", 4)) {
-		if (!!(*sfi & SFI_FORCE_SHEX) || *force_shex)
-			*section = manufacture_empty_section("SHEX");
-		else
-			*section = manufacture_empty_section("SHDR");
-		return true;
+    if (line.compare(1, 4, "s_4_") == 0) {
+        done = true;
+        if ((sfi & SFI_FORCE_SHEX) || force_shex) {
+            return manufacture_empty_section("SHEX");
+        }
+		return manufacture_empty_section("SHDR");
 	}
-	if (!strncmp(line->c_str() + 1, "s_5_", 4)) {
-		*section = manufacture_empty_section("SHEX");
-		return true;
+	if (line.compare(1, 4, "s_5_") == 0) {
+        done = true;
+		return manufacture_empty_section("SHEX");
 	}
 
-	if (!strncmp(line->c_str(), "// Patch Constant signature:", 28)) {
+	done = false;
+	if (line.starts_with("// Patch Constant signature:")) {
         spdlog::info("Parsing Patch Constant Signature section...");
-		*section = parse_signature_section("PCSG", NULL, "PSG1", shader, pos, is_hull_shader(shader, *pos), *sfi);
-	} else if (!strncmp(line->c_str(), "// Input signature:", 19)) {
+		return parse_signature_section("PCSG", NULL, "PSG1", shader, pos, is_hull_shader(shader, pos), sfi);
+	} 
+	if (line.starts_with("// Input signature:")) {
         spdlog::info("Parsing Input Signature section...");
-		*section = parse_signature_section("ISGN", NULL, "ISG1", shader, pos, false, *sfi);
-	} else if (!strncmp(line->c_str(), "// Output signature:", 20)) {
+		return parse_signature_section("ISGN", NULL, "ISG1", shader, pos, false, sfi);
+	} 
+	if (line.starts_with("// Output signature:")) {
         spdlog::info("Parsing Output Signature section...");
 		const char *section24 = "OSGN";
-		if (is_geometry_shader_5(shader, *pos))
-			section24 = NULL;
-		*section = parse_signature_section(section24, "OSG5", "OSG1", shader, pos, true, *sfi);
-	} else if (!strncmp(line->c_str(), "// Note: shader requires additional functionality:", 50)) {
-        spdlog::info("Parsing Subshader Feature Info section...");
-		*sfi = parse_subshader_feature_info_comment(shader, pos, *sfi);
-	} else if (!strncmp(line->c_str(), "// Note: SHADER WILL ONLY WORK WITH THE DEBUG SDK LAYER ENABLED.", 64)) {
-		*force_shex = true;
+        if (is_geometry_shader_5(shader, pos)) {
+            section24 = NULL;
+        }
+		return parse_signature_section(section24, "OSG5", "OSG1", shader, pos, true, sfi);
 	}
-
-	return false;
+	if (line.starts_with("// Note: shader requires additional functionality:")) {
+        spdlog::info("Parsing Subshader Feature Info section...");
+		sfi = parse_subshader_feature_info_comment(shader, pos, sfi);
+	} else if (line.starts_with("// Note: SHADER WILL ONLY WORK WITH THE DEBUG SDK LAYER ENABLED.")) {
+		force_shex = true;
+	}
+    return std::vector<uint8_t>{};
 }
 
-static void serialise_shader_binary(vector<void*> *sections, uint32_t all_sections_size, vector<uint8_t> *bytecode)
+static std::vector<uint8_t> serialise_shader_binary(const std::list<std::vector<uint8_t>> &sections)
 {
 	struct dxbc_header *header = NULL;
 	uint32_t *section_offset_ptr = NULL;
 	void *section_ptr = NULL;
-	uint32_t section_size;
-	uint32_t shader_size;
 
 	// Calculate final size of shader binary:
-	shader_size = (uint32_t)(sizeof(struct dxbc_header) + 4 * sections->size() + all_sections_size);
-
-	bytecode->resize(shader_size);
+    size_t allSectionsSize{};
+    for (auto& section : sections)
+        allSectionsSize += section.size();
+    std::vector<uint8_t> bytecode(sizeof(dxbc_header) + 4 * sections.size() + allSectionsSize);
 
 	// Get some useful pointers into the buffer:
-	header = (struct dxbc_header*)bytecode->data();
+	header = (struct dxbc_header*)bytecode.data();
 	section_offset_ptr = (uint32_t*)((char*)header + sizeof(struct dxbc_header));
-	section_ptr = (void*)(section_offset_ptr + sections->size());
+	section_ptr = (void*)(section_offset_ptr + sections.size());
 
 	memcpy(header->signature, "DXBC", 4);
 	memset(header->hash, 0, sizeof(header->hash)); // Will be filled in by assembler
 	header->one = 1;
-	header->size = shader_size;
-	header->num_sections = (uint32_t)sections->size();
+	header->size = bytecode.size();
+	header->num_sections = (uint32_t)sections.size();
 
-	for (void *section : *sections) {
-		section_size = *((uint32_t*)section + 1) + sizeof(section_header);
-		memcpy(section_ptr, section, section_size);
+	for (auto &section : sections) {
+		memcpy(section_ptr, section.data(), section.size());
 		*section_offset_ptr = (uint32_t)((char*)section_ptr - (char*)header);
 		section_offset_ptr++;
-		section_ptr = (char*)section_ptr + section_size;
+		section_ptr = (char*)section_ptr + section.size();
 	}
+    return bytecode;
 }
 
-static HRESULT manufacture_shader_binary(const void *pShaderAsm, size_t AsmLength, vector<uint8_t> *bytecode)
+static vector<uint8_t> manufacture_shader_binary(const std::string& sourceCode) 
 {
-	string shader_str((const char*)pShaderAsm, AsmLength);
-	string line;
+	std::string line;
 	size_t pos = 0;
 	bool done = false;
-	vector<void*> sections;
-	uint32_t section_size, all_sections_size = 0;
-	void *section;
-	HRESULT hr = E_FAIL;
-	uint64_t sfi = 0LL;
+	std::list<std::vector<uint8_t>> sections;
 	bool force_shex = false;
 
-	sfi = parse_global_flags_to_sfi(&shader_str);
+	uint64_t sfi = parse_global_flags_to_sfi(sourceCode);
 
-	while (!done && pos != shader_str.npos) {
-		line = next_line(&shader_str, &pos);
+	while (!done && pos != std::string::npos) {
+		line = next_line(sourceCode, pos);
 		//LogInfo("%s\n", line.c_str());
 
-		done = parse_section(&line, &shader_str, &pos, &section, &sfi, &force_shex);
-		if (section) {
-			sections.push_back(section);
-			section_size = *((uint32_t*)section + 1) + sizeof(section_header);
-			all_sections_size += section_size;
-
-			/*
-			if (gLogDebug) {
-				LogInfo("Constructed section size=%u:\n", section_size);
-				for (uint32_t i = 0; i < section_size; i++) {
-					if (i && i % 16 == 0)
-						LogInfo("\n");
-					LogInfoNoNL("%02x ", ((unsigned char*)section)[i]);
-				}
-				LogInfo("\n");
-			}
-			*/
+		std::vector<uint8_t> section = parse_section(line, sourceCode, pos, sfi, force_shex, done);
+		if (!section.empty()) {
+			sections.emplace_back(std::move(section));
 		}
 	}
 
 	if (!done) {
         spdlog::info("Did not find an assembly text section!");
-		goto out_free;
+        return vector<uint8_t>{};
 	}
 
 	if (sfi) {
-		section = serialise_subshader_feature_info_section(sfi);
-		sections.insert(sections.begin(), section);
-		section_size = *((uint32_t*)section + 1) + sizeof(section_header);
-		all_sections_size += section_size;
+		sections.emplace_front(std::move(serialise_subshader_feature_info_section(sfi)));
         spdlog::info("Inserted Subshader Feature Info section: {:x}", sfi);
 	}
-
-	serialise_shader_binary(&sections, all_sections_size, bytecode);
-
-	hr = S_OK;
-out_free:
-	for (void * const &section : sections)
-		free(section);
-	return hr;
+	return serialise_shader_binary(sections);
 }
 
-int32_t AssembleFluganWithSignatureParsing(vector<char> *assembly, vector<uint8_t> *result_bytecode,
-		vector<AssemblerParseError> *parse_errors)
+std::vector<uint8_t> AssembleFluganWithSignatureParsing(const std::string& assembly, std::list<AssemblerParseError>& parse_errors) 
 {
-	vector<uint8_t> manufactured_bytecode;
-	HRESULT hr;
-
 	// Flugan's assembler normally cheats and reuses sections from the
 	// original binary when replacing a shader from the game, but that
 	// restricts what modifications we can do and is not an option when
 	// assembling a stand-alone shader. Let's parse the missing sections
-	// ourselved and manufacture a binary shader with those section to pass
+	// ourselves and manufacture a binary shader with those section to pass
 	// to Flugan's assembler. Later we should refactor this into the
 	// assembler itself.
+	auto manufactured_bytecode = manufacture_shader_binary(assembly);
+    if (manufactured_bytecode.empty())
+		return std::vector<uint8_t>{};
 
-	hr = manufacture_shader_binary(assembly->data(), assembly->size(), &manufactured_bytecode);
-	if (FAILED(hr))
-		return E_FAIL;
-
-	*result_bytecode = assembler(assembly, manufactured_bytecode, parse_errors);
-
-	return S_OK;
+	return assembler(assembly, manufactured_bytecode, parse_errors);
 }
-vector<uint8_t> AssembleFluganWithOptionalSignatureParsing(vector<char> *assembly,
-		bool assemble_signatures, vector<uint8_t> *orig_bytecode,
-		vector<AssemblerParseError> *parse_errors)
+
+vector<uint8_t> AssembleFluganWithOptionalSignatureParsing(const std::string &sourceCode, bool assemble_signatures, const std::vector<uint8_t> &orig_bytecode, std::list<AssemblerParseError> &parse_errors)
 {
-	vector<uint8_t> new_bytecode;
-	HRESULT hr;
-
 	if (!assemble_signatures)
-		return assembler(assembly, *orig_bytecode, parse_errors);
+		return assembler(sourceCode, orig_bytecode, parse_errors);
 
-	hr = AssembleFluganWithSignatureParsing(assembly, &new_bytecode, parse_errors);
-	if (FAILED(hr))
-		throw parseError;
-
-	return new_bytecode;
+	return AssembleFluganWithSignatureParsing(sourceCode, parse_errors);
 }
 
 // :alex:
@@ -825,49 +752,89 @@ std::string BinaryToAsmText(const void* pShaderBytecode, size_t BytecodeLength, 
 }
 
 // :alex:
-char *ReplaceASMShader(const uint64_t hash, const char* pShaderType, const void* pShaderBytecode, uint64_t pBytecodeLength, uint64_t& pCodeSize)
+std::vector<uint8_t> ReplaceASMShader(const uint64_t hash, const char* pShaderType, const void* pShaderBytecode, uint64_t BytecodeLength)
 {
-    char* pCode = nullptr;
+    std::vector<uint8_t> replacementShader;
     const std::filesystem::path final_path = Framework::getShaderPath(hash, pShaderType, "shaders").string();
 
-    HANDLE f = CreateFile(final_path.string().c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    string shaderModel;
-    if (f != INVALID_HANDLE_VALUE) {
+	// matching shader replacement file available?
+    std::ifstream f{final_path.string()};
+    if (f) {
         spdlog::info("    Replacement ASM shader found. Assembling replacement ASM code.");
+        
+		auto fileSize = std::filesystem::file_size(final_path);
+        std::string sourceCode(fileSize, '\0');
+        f.read(sourceCode.data(), fileSize);
+        spdlog::info("    Asm source code loaded. Size = {}", sourceCode.size());
 
-        DWORD srcDataSize = GetFileSize(f, 0);
-        vector<char> asmTextBytes(srcDataSize);
-        DWORD readSize;
-        if (!ReadFile(f, asmTextBytes.data(), srcDataSize, &readSize, 0) || srcDataSize != readSize)
-            spdlog::info("    Error reading file.");
-        CloseHandle(f);
-        spdlog::info("    Asm source code loaded. Size = {}", srcDataSize);
+        vector<uint8_t> byteCode(BytecodeLength);
+        memcpy(byteCode.data(), pShaderBytecode, BytecodeLength);
 
-        vector<uint8_t> byteCode(pBytecodeLength);
-        memcpy(byteCode.data(), pShaderBytecode, pBytecodeLength);
-
-        // Re-assemble the ASM text back to binary
+        // Assemble to binary
         try {
-            vector<AssemblerParseError> parse_errors;
-            byteCode = AssembleFluganWithOptionalSignatureParsing(&asmTextBytes, true, &byteCode, &parse_errors);
-
-            // Assuming the re-assembly worked, let's make it the active shader code.
-            pCodeSize = byteCode.size();
-            pCode = new char[pCodeSize];
-            memcpy(pCode, byteCode.data(), pCodeSize);
-
-            // Cache binary replacement.
-            if (!parse_errors.empty()) {
-                // Parse errors are currently being treated as non-fatal on
-                // creation time replacement and ShaderRegex for backwards
-                // compatibility (live shader reload is fatal).
-                for (auto& parse_error : parse_errors)
-                    spdlog::warn("{}: {}\n", final_path.filename().string(), parse_error.what());
+            std::list<AssemblerParseError> parse_errors;
+            std::vector<uint8_t> origByteCode(BytecodeLength);
+            memcpy(origByteCode.data(), pShaderBytecode, BytecodeLength);
+            replacementShader = AssembleFluganWithOptionalSignatureParsing(sourceCode, true, origByteCode, parse_errors);
+            for (auto& parse_error : parse_errors) {
+                spdlog::warn("{}: {}", final_path.filename().string(), parse_error.what());
+            }
+            if (!replacementShader.empty()) {
+                return replacementShader;
             }
         } catch (const exception& e) {
-            spdlog::warn("Error assembling {}: {}\n", final_path.filename().string(), e.what());
+            spdlog::warn("Error assembling {}: {}", final_path.filename().string(), e.what());
         }
     }
 
-    return pCode;
+	// try regex replacement
+    if (!Framework::m_regex_ps.empty()) {
+        std::string disasm{BinaryToAsmText(pShaderBytecode, BytecodeLength, false)};
+        if (Framework::m_regex_failed_shaders.find(hash) == Framework::m_regex_failed_shaders.end()) {
+            std::string replacementSource;
+            for (auto& regEx : Framework::m_regex_ps) {
+                if (disasm.find_first_of(regEx.m_search) == std::string::npos)
+                    continue;
+                // At a minimum we want \n to be translated in the replace string, which needs extended substitution processing to be
+                // enabled.
+                auto match_data = pcre2_match_data_create_from_pattern(regEx.m_regex, NULL);
+                auto output_size = disasm.length() + regEx.m_replacement.length() + 1024;
+                std::string buf(output_size, '\0');
+                auto rc = pcre2_substitute(regEx.m_regex, (PCRE2_SPTR)disasm.c_str(), disasm.length(), 0,
+                    PCRE2_SUBSTITUTE_EXTENDED | PCRE2_SUBSTITUTE_OVERFLOW_LENGTH, match_data, NULL, (PCRE2_SPTR)regEx.m_replacement.c_str(),
+                    regEx.m_replacement.length(), (PCRE2_UCHAR8*)buf.data(), &output_size);
+                pcre2_match_data_free(match_data);
+                if (rc < 0) {
+                    spdlog::warn("Error regex replace #{}", rc);
+                    continue;
+                }
+                if (rc == 0) {
+                    // not found
+                    continue;
+                }
+                replacementSource.swap(buf);
+                break;
+            }
+            if (!replacementSource.empty()) {
+                // Assemble to binary
+                try {
+                    std::list<AssemblerParseError> parse_errors;
+                    std::vector<uint8_t> origByteCode(BytecodeLength);
+                    memcpy(origByteCode.data(), pShaderBytecode, BytecodeLength);
+                    replacementShader = AssembleFluganWithOptionalSignatureParsing(replacementSource, true, origByteCode, parse_errors);
+                    for (auto& parse_error : parse_errors) {
+                        spdlog::warn("{}: {}", final_path.filename().string(), parse_error.what());
+                    }
+                    if (!replacementShader.empty()) {
+                        return replacementShader;
+                    }
+                } catch (const exception& e) {
+                    spdlog::warn("Error assembling {}: {}", final_path.filename().string(), e.what());
+                }
+            }
+            Framework::m_regex_failed_shaders.insert(hash);
+        }
+    }
+
+    return replacementShader;
 }

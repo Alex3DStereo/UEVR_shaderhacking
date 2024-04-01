@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <d3dcommon.h>
 #include <d3dcompiler.h>
+#include <format>
 
 using namespace std;
 
@@ -177,112 +178,72 @@ static string convertD(DWORD v1, DWORD v2)
 	return buf;
 }
 
-void writeLUT()
+static void handleSwizzle(string s, token_operand &tOp, bool special = false)
 {
-	FILE* f;
-
-	fopen_s(&f, "lut.asm", "wb");
-	if (!f)
-		return;
-
-	for (unordered_map<string, vector<DWORD>>::iterator it = codeBin.begin(); it != codeBin.end(); ++it) {
-		fputs(it->first.c_str(), f);
-		fputs(":->", f);
-		vector<DWORD> b = it->second;
-		int nextOperand = 1;
-		for (DWORD i = 0; i < b.size(); i++) {
-			if (i == 0) {
-				char hex[40];
-				shader_ins* ins = (shader_ins*)&b[0];
-				if (ins->_11_23 > 0) {
-					if (ins->extended)
-						sprintf_s(hex, "0x%08X: %d,%d,%d<>%d->", b[0], ins->opcode, ins->_11_23, ins->length, ins->extended);
-					else
-						sprintf_s(hex, "0x%08X: %d,%d,%d->", b[0], ins->opcode, ins->_11_23, ins->length);
-				} else {
-					if (ins->extended)
-						sprintf_s(hex, "0x%08X: %d,%d<>%d->", b[0], ins->opcode, ins->length, ins->extended);
-					else
-						sprintf_s(hex, "0x%08X: %d,%d->", b[0], ins->opcode, ins->length);
-				}
-				fputs(hex, f);
-			} else {
-				char hex[20];
-				sprintf_s(hex, " 0x%08X", b[i]);
-				fputs(hex, f);
-			}
-		}
-		fputs("\n", f);
-	}
-	fclose(f);
-}
-
-static void handleSwizzle(string s, token_operand* tOp, bool special = false)
-{
-	if (special == true){
+	if (special) {
 		// Mask
-		tOp->mode = 0; // Mask
-		if (s.size() > 0 && s[0] == 'x') {
-			tOp->sel |= 0x1;
+		tOp.mode = 0; // Mask
+		if (!s.empty() && s[0] == 'x') {
+			tOp.sel |= 0x1;
 			s.erase(s.begin());
 		}
-		if (s.size() > 0 && s[0] == 'y') {
-			tOp->sel |= 0x2;
+		if (!s.empty() && s[0] == 'y') {
+			tOp.sel |= 0x2;
 			s.erase(s.begin());
 		}
-		if (s.size() > 0 && s[0] == 'z') {
-			tOp->sel |= 0x4;
+		if (!s.empty() && s[0] == 'z') {
+			tOp.sel |= 0x4;
 			s.erase(s.begin());
 		}
-		if (s.size() > 0 && s[0] == 'w') {
-			tOp->sel |= 0x8;
+		if (!s.empty() && s[0] == 'w') {
+			tOp.sel |= 0x8;
 			s.erase(s.begin());
 		}
 		return;
-	} else if (s.size() == 0) {
-		tOp->mode = 0;
-		tOp->comps_enum = 0;
+	} else if (s.empty()) {
+		tOp.mode = 0;
+		tOp.comps_enum = 0;
 		return;
 	} else if(s.size() == 4) {
 		// Swizzle
-		tOp->mode = 1; // Swizzle
+		tOp.mode = 1; // Swizzle
 		for (int i = 0; i < 4; i++) {
 			if (s[i] == 'x')
-				tOp->sel |= 0 << (2 * i);
+				tOp.sel |= 0 << (2 * i);
 			if (s[i] == 'y')
-				tOp->sel |= 1 << (2 * i);
+				tOp.sel |= 1 << (2 * i);
 			if (s[i] == 'z')
-				tOp->sel |= 2 << (2 * i);
+				tOp.sel |= 2 << (2 * i);
 			if (s[i] == 'w')
-				tOp->sel |= 3 << (2 * i);
+				tOp.sel |= 3 << (2 * i);
 		}
 	} else if (s.size() == 1){
-		tOp->mode = 2; // Scalar
+		tOp.mode = 2; // Scalar
 		if (s[0] == 'x')
-			tOp->sel = 0;
+			tOp.sel = 0;
 		if (s[0] == 'y')
-			tOp->sel = 1;
+			tOp.sel = 1;
 		if (s[0] == 'z')
-			tOp->sel = 2;
+			tOp.sel = 2;
 		if (s[0] == 'w')
-			tOp->sel = 3;
+			tOp.sel = 3;
 	} else {
 		// Mask
-		tOp->mode = 0; // Mask
+		tOp.mode = 0; // Mask
 		if (s.size() > 0 && s[0] == 'x') {
-			tOp->sel |= 0x1;
+			tOp.sel |= 0x1;
 			s.erase(s.begin());
 		}
 		if (s.size() > 0 && s[0] == 'y') {
-			tOp->sel |= 0x2;
+			tOp.sel |= 0x2;
 			s.erase(s.begin());
 		}
 		if (s.size() > 0 && s[0] == 'z') {
-			tOp->sel |= 0x4;
+			tOp.sel |= 0x4;
 			s.erase(s.begin());
 		}
 		if (s.size() > 0 && s[0] == 'w') {
-			tOp->sel |= 0x8;
+			tOp.sel |= 0x8;
 			s.erase(s.begin());
 		}
 	}
@@ -338,7 +299,7 @@ static struct special_purpose_register special_purpose_registers[] = {
 	// https://msdn.microsoft.com/en-us/library/windows/desktop/hh446903(v=vs.85).aspx
 };
 
-static bool assemble_special_purpose_register(string &s, vector<DWORD> &v, token_operand *tOp, bool special)
+static bool assemble_special_purpose_register(string &s, vector<DWORD> &v, token_operand &tOp, bool special)
 {
 	size_t swiz_pos = s.find('.');
 	int i;
@@ -347,15 +308,15 @@ static bool assemble_special_purpose_register(string &s, vector<DWORD> &v, token
 		if (s.compare(0, swiz_pos, special_purpose_registers[i].name))
 			continue;
 
-		tOp->file = special_purpose_registers[i].file;
+		tOp.file = special_purpose_registers[i].file;
 
 		// comps_enum was set to 2 as a default at the start of assembleOp
 		if (swiz_pos != string::npos)
 			handleSwizzle(s.substr(swiz_pos + 1), tOp, special);
 		else
-			tOp->comps_enum = special_purpose_registers[i].comps_enum;
+			tOp.comps_enum = special_purpose_registers[i].comps_enum;
 
-		v.insert(v.begin(), tOp->op);
+		v.insert(v.begin(), tOp.op);
 		return true;
 	}
 
@@ -364,35 +325,30 @@ static bool assemble_special_purpose_register(string &s, vector<DWORD> &v, token
 
 static vector<DWORD> assembleOp(string s, bool special = false);
 
-static vector<DWORD> assemble_cbvox_operand(string &s, vector<DWORD> &v, token_operand *tOp, bool special, DWORD num)
+static vector<DWORD> assemble_cbvox_operand(string &s, vector<DWORD> &v, token_operand &tOp, bool special)
 {
-	tOp->num_indices = 2;
+	tOp.num_indices = 2;
 	if (s[0] == 'x') { // Indexable temp array
-		tOp->file = 3;
+		tOp.file = 3;
 		s.erase(s.begin());
 	} else if (s[0] == 'o') { // Output register
-		tOp->file = 2;
-		tOp->num_indices = 1;
+		tOp.file = 2;
+		tOp.num_indices = 1;
 		s.erase(s.begin());
 	} else if (s[0] == 'v') { // Input register
-		tOp->file = 1;
+		tOp.file = 1;
 		if (s.size() > 4 && s[1] == 'i' && s[2] == 'c' && s[3] == 'p')  { // Hull shader vicp
-			tOp->file = 0x19;
-			s.erase(s.begin());
-			s.erase(s.begin());
-			s.erase(s.begin());
+			tOp.file = 0x19;
+			s.erase(0, 3);
 		} else if (s.size() > 4 && s[1] == 'o' && s[2] == 'c' && s[3] == 'p') { // Hull shader vocp
-			tOp->file = 0x1A;
-			s.erase(s.begin());
-			s.erase(s.begin());
-			s.erase(s.begin());
+			tOp.file = 0x1A;
+			s.erase(0, 3);
 		} else if (s[1] == 'p' && s[2] == 'c') { // Patch constant
-			tOp->file = 0x1B;
-			s.erase(s.begin());
-			s.erase(s.begin());
+			tOp.file = 0x1B;
+            s.erase(0, 2);
 		}
 		s.erase(s.begin());
-		tOp->num_indices = 1;
+		tOp.num_indices = 1;
 		size_t start = s.find("][");
 		if (start != string::npos) {
 			size_t end = s.find("]", start + 1);
@@ -402,20 +358,20 @@ static vector<DWORD> assemble_cbvox_operand(string &s, vector<DWORD> &v, token_o
 				string sReg = index0.substr(0, index0.find(" + "));
 				string sAdd = index0.substr(index0.find(" + ") + 3);
 				vector<DWORD> reg = assembleOp(sReg);
-				tOp->num_indices = 2;
-				tOp->index0_repr = 2;
+				tOp.num_indices = 2;
+				tOp.index0_repr = 2;
 				int iAdd = atoi(sAdd.c_str());
-				if (iAdd) tOp->index0_repr = 3;
+				if (iAdd) tOp.index0_repr = 3;
 				if (index1.find("+") != string::npos) {
 					string sReg2 = index1.substr(0, index1.find(" + "));
 					string sAdd2 = index1.substr(index1.find(" + ") + 3);
 					vector<DWORD> reg2 = assembleOp(sReg2);
-					tOp->index1_repr = 2;
+					tOp.index1_repr = 2;
 					int iAdd2 = atoi(sAdd.c_str());
-					if (iAdd2) tOp->index1_repr = 3;
+					if (iAdd2) tOp.index1_repr = 3;
 					string swizzle = s.substr(s.find("].") + 2);
 					handleSwizzle(swizzle, tOp);
-					v.insert(v.begin(), tOp->op);
+					v.insert(v.begin(), tOp.op);
 					if (iAdd) v.push_back(iAdd);
 					v.push_back(reg[0]);
 					v.push_back(reg[1]);
@@ -426,99 +382,118 @@ static vector<DWORD> assemble_cbvox_operand(string &s, vector<DWORD> &v, token_o
 				}
 				string swizzle = s.substr(s.find("].") + 2);
 				handleSwizzle(swizzle, tOp);
-				v.insert(v.begin(), tOp->op);
+				v.insert(v.begin(), tOp.op);
 				if (iAdd) v.push_back(iAdd);
 				v.push_back(reg[0]);
 				v.push_back(reg[1]);
 				v.push_back(atoi(index1.c_str()));
 				return v;
 			}
-			tOp->num_indices = 2;
+			tOp.num_indices = 2;
 			string swizzle = s.substr(s.find('.') + 1);
 			handleSwizzle(swizzle, tOp, special);
-			v.insert(v.begin(), tOp->op);
+			v.insert(v.begin(), tOp.op);
 			v.push_back(atoi(index0.c_str()));
 			v.push_back(atoi(index1.c_str()));
 			return v;
 		}
 	} else if (s[0] == 'i') { // Immediate Constant Buffer
-		tOp->file = 9;
-		s.erase(s.begin());
-		s.erase(s.begin());
-		s.erase(s.begin());
-		tOp->num_indices = 1;
+		tOp.file = 9;
+        s.erase(0, 3);
+		tOp.num_indices = 1;
 	} else { // Constant buffer
-		tOp->file = 8;
-		s.erase(s.begin());
-		s.erase(s.begin());
+		tOp.file = 8;
+        s.erase(0, 2);
 	}
 	string sNum;
 	bool hasIndex = false;
-	if (s.find("[") < s.size()) {
+    int indexRepresentationPos = 0;
+	if (s.find("[") != std::string::npos) {
 		sNum = s.substr(0, s.find('['));
 		hasIndex = true;
 	} else {
 		sNum = s.substr(0, s.find('.'));
 	}
+    if (!sNum.empty()) {
+        v.push_back(atoi(sNum.c_str()));
+        ++indexRepresentationPos;
+    }
+
 	string index;
 	if (hasIndex) {
 		size_t start = s.find('[');
 		size_t end = s.find(']', start);
-		index = s.substr(start + 1, end - start - 1);
+        index = s.substr(start + 1, end - start - 1);
+        size_t pos = index.find(':');
+        if (pos != string::npos) {
+			// range in resource declaration
+            tOp.num_indices = 3;
+            DWORD num = atoi(index.substr(0, pos).c_str());
+            v.push_back(num);
+            num = atoi(index.substr(pos+1, end-pos-1).c_str());
+            v.push_back(num);
+            start = s.find('[', end);
+            hasIndex = start != string::npos;
+            if (hasIndex) {
+                end = s.find(']', start);
+                index = s.substr(start + 1, end - start - 1);
+            }
+        } else {
+			// resource index in instruction?
+            start = s.find('[', end);
+            if (start != string::npos) {
+                tOp.num_indices = 3;
+                v.push_back(atoi(index.c_str()));
+                end = s.find(']', start);
+                index = s.substr(start + 1, end - start - 1);
+                ++indexRepresentationPos;
+			}
+        }
 	}
 	if (hasIndex) {
-		if (index.find('+') < index.size()) {
+		if (index.find('+') != string::npos) {
 			string s2 = index.substr(index.find('+') + 2);
 			DWORD idx = atoi(s2.c_str());
 			string s3 = index.substr(0, index.find('+') - 1);
 			vector<DWORD> reg = assembleOp(s3);
-			if (sNum.size() > 0) {
-				num = atoi(sNum.c_str());
-				v.push_back(num);
-			}
+            unsigned int indexRepresentation = 0;
 			if (idx != 0) {
 				v.push_back(idx);
-				if (sNum.size() > 0)
-					tOp->index1_repr = 3; // Reg + imm
-				else
-					tOp->index0_repr = 3; // Reg + imm
+				indexRepresentation = 3; // Reg + imm
 			} else {
-				if (sNum.size() > 0)
-					tOp->index1_repr = 2; // Reg;
-				else
-					tOp->index0_repr = 2; // Reg;
+				indexRepresentation = 2; // Reg;
 			}
-			for (DWORD i = 0; i < reg.size(); i++) {
-				v.push_back(reg[i]);
-			}
+            if (indexRepresentationPos == 0) 
+				tOp.index0_repr = indexRepresentation;
+            else if (indexRepresentationPos == 1) 
+				tOp.index1_repr = indexRepresentation;
+            else
+                tOp.index2_repr = indexRepresentation;
+            v.insert(v.end(), reg.begin(), reg.end());
 			handleSwizzle(s.substr(s.find("].") + 2), tOp, special);
 
-			v.insert(v.begin(), tOp->op);
+			v.insert(v.begin(), tOp.op);
 			return v;
 		}
 		DWORD idx = atoi(index.c_str());
-		num = atoi(sNum.c_str());
-		v.push_back(num);
 		v.push_back(idx);
 		if (s.find('.') < s.size()) {
 			handleSwizzle(s.substr(s.find('.') + 1), tOp, special);
 		} else {
-			tOp->mode = 1; // Swizzle
-			tOp->sel = 0xE4;
+			tOp.mode = 1; // Swizzle
+			tOp.sel = 0xE4;
 		}
-		v.insert(v.begin(), tOp->op);
+		v.insert(v.begin(), tOp.op);
 		return v;
 	}
-	num = atoi(sNum.c_str());
-	v.push_back(num);
 	handleSwizzle(s.substr(s.find('.') + 1), tOp, special);
-	v.insert(v.begin(), tOp->op);
+	v.insert(v.begin(), tOp.op);
 	return v;
 }
 
-static vector<DWORD> assemble_literal_operand(string &s, vector<DWORD> &v, token_operand *tOp)
+static vector<DWORD> assemble_literal_operand(string &s, vector<DWORD> &v, token_operand &tOp)
 {
-	tOp->file = 4;
+	tOp.file = 4;
 	s.erase(s.begin());
 	if (s.find(",") < s.size()) {
 		s.erase(s.begin());
@@ -541,16 +516,16 @@ static vector<DWORD> assemble_literal_operand(string &s, vector<DWORD> &v, token
 		v.push_back(strToDWORD(s3));
 		v.push_back(strToDWORD(s4));
 	} else {
-		tOp->comps_enum = 1; // 1
+		tOp.comps_enum = 1; // 1
 		s.erase(s.begin());
 		s.pop_back();
 		v.push_back(strToDWORD(s));
 	}
-	v.insert(v.begin(), tOp->op);
+	v.insert(v.begin(), tOp.op);
 	return v;
 }
 
-static vector<DWORD> assemble_double_operand(string &s, vector<DWORD> &v, token_operand *tOp)
+static vector<DWORD> assemble_double_operand(string &s, vector<DWORD> &v, token_operand &tOp)
 {
 	// Examples of double literals (from RE2):
 	//   d(0.000000l, 766800.000000l)
@@ -580,9 +555,9 @@ static vector<DWORD> assemble_double_operand(string &s, vector<DWORD> &v, token_
 	// So we need a special case to handle 64bit hex values split into two
 	// 32bit components.
 
-	tOp->file = 5; // Double
-	tOp->comps_enum = 2; // Use 4 components (until proven otherwise)
-	v.push_back(tOp->op);
+	tOp.file = 5; // Double
+	tOp.comps_enum = 2; // Use 4 components (until proven otherwise)
+	v.push_back(tOp.op);
 
 	size_t comma = s.find(",", 2);
 	if (comma == string::npos)
@@ -634,10 +609,8 @@ static DWORD encode_min_precision_type(const char *type)
 	return 0;
 }
 
-static void parse_min_precision_tag(string &s, vector<DWORD> &v, token_operand *tOp, DWORD *ext)
+static void parse_min_precision_tag(string &s, vector<DWORD> &v, token_operand &tOp, DWORD *ext)
 {
-	size_t tag;
-
 	// Windows 8 minimum precision tag can take two forms:
 	// "operand {type1}" for either source or destination where their min precision types match
 	// "operand {type1 as type2}" when a source operand (type1) needs to be cast to match the destination (type2)
@@ -651,7 +624,10 @@ static void parse_min_precision_tag(string &s, vector<DWORD> &v, token_operand *
 	//  min16i  | min12int  <-- No distinction in assembly from min16int? Maybe the unused 3?
 	//  min16u  | min16uint
 
-	tag = s.find('{');
+	size_t tag = s.find('{');
+	// skip non uniform tag
+    if (tag != string::npos && s.compare(tag, 14, "{ nonuniform }") == 0)
+		tag = s.find('{', tag+1);
 	if (tag == string::npos)
 		return;
 
@@ -669,7 +645,7 @@ static void parse_min_precision_tag(string &s, vector<DWORD> &v, token_operand *
 
 	DWORD type1 = encode_min_precision_type(s.c_str() + tag + 1);
 	if (type1) {
-		tOp->extended = 1;
+		tOp.extended = 1;
 		*ext |= 0x00000001;
 		*ext |= type1;
 	}
@@ -689,8 +665,8 @@ static vector<DWORD> assembleOp(string s, bool special)
 	DWORD num = 0;
 	DWORD index = 0;
 	DWORD value = 0;
-	token_operand* tOp = (token_operand*)&op;
-	tOp->comps_enum = 2; // 4
+	token_operand &tOp = (token_operand&)op;
+	tOp.comps_enum = 2; // 4
 
 	num = atoi(s.c_str());
 	if (num != 0) {
@@ -698,38 +674,31 @@ static vector<DWORD> assembleOp(string s, bool special)
 		return v;
 	}
 	if (s[0] == '-') {
+		// negative extended modifier
 		s.erase(s.begin());
-		tOp->extended = 1;
+		tOp.extended = 1;
 		ext |= 0x41;
 	}
 	if (s[0] == '|') {
+		// absolute extended modifier
 		s.erase(s.begin());
 		s.erase(s.end() - 1);
-		tOp->extended = 1;
+		tOp.extended = 1;
 		ext |= 0x81;
 	}
-
-#if 0
-	// These ones were special cased in the DX9 port, but I don't think we need
-	// them since we aren't using Flugan's assembler for DX9? Disabling -DSS
-	if (s == "vCoverage.x") {
-		v.push_back(0x2300A);
-		return v;
-
+    if (s.ends_with(" { nonuniform }")) {
+		// non uniform
+        tOp.extended = 1;
+        ext |= 0x20001;
+        s.erase(s.size() - 15);
 	}
-	if (s == "rasterizer.x") {
-		v.push_back(0x0000E00A);
-		return v;
-
-	}
-#endif
 
 	// Processing this after absolute value so that |var {type}| will be
 	// processed in a natural order, though this function also strips the
 	// tag as a secondary measure (either would be sufficient by itself):
 	parse_min_precision_tag(s, v, tOp, &ext);
 
-	if (tOp->extended)
+	if (tOp.extended)
 		v.push_back(ext);
 
 	if (assemble_special_purpose_register(s, v, tOp, special))
@@ -741,7 +710,7 @@ static vector<DWORD> assembleOp(string s, bool special)
 	 || s[0] == 'x'
 	 || s[0] == 'o'
 	 || s[0] == 'v') {
-		return assemble_cbvox_operand(s, v, tOp, special, num);
+		return assemble_cbvox_operand(s, v, tOp, special);
 	}
 
 	if (s[0] == 'l')
@@ -751,31 +720,92 @@ static vector<DWORD> assembleOp(string s, bool special)
 		return assemble_double_operand(s, v, tOp);
 
 	if (s[0] == 'r') {
-		tOp->file = 0;
-	} else if (s[0] == 's') {
-		tOp->file = 6;
-	} else if (s[0] == 't') {
-		tOp->file = 7;
+		tOp.file = 0;
+    } else if (s[0] == 's' || s[0] == 'S') {
+		tOp.file = 6;
+    } else if (s[0] == 't' || s[0] == 'T') {
+		tOp.file = 7;
 	} else if (s[0] == 'g') {
-		tOp->file = 0x1F;
+		tOp.file = 0x1F;
 	} else if (s[0] == 'u') {
-		tOp->file = 0x1E;
-	} else if (s[0] == 'm')
-		tOp->file = 0x10;
-	else
-		throw AssemblerParseError(s, "Unrecognised operand");
-
-	s.erase(s.begin());
-	tOp->num_indices = 1;
-	num = atoi(s.substr(0, s.find('.')).c_str());
-	v.push_back(num);
-	if (s.find('.') < s.size()) {
-		handleSwizzle(s.substr(s.find('.') + 1), tOp, special);
+		tOp.file = 0x1E;
+	} else if (s[0] == 'm') {
+		tOp.file = 0x10;
 	} else {
-		handleSwizzle("", tOp, special);
-	}
-	v.insert(v.begin(), op);
-	return v;
+		throw AssemblerParseError(s, "Unrecognised operand");
+    }
+
+	size_t bracketPos = s.find('[');
+    size_t colonPos = s.find(':');
+    size_t sumPos = s.find('+');
+    size_t dotPos = s.find('.');
+    if (bracketPos == std::string::npos) {
+		// example: r8.xyz
+		tOp.num_indices = 1;
+		num = atoi(s.substr(1, s.find('.')).c_str());
+		v.push_back(num);
+    } else if (colonPos == std::string::npos) {
+        if (sumPos == std::string::npos) {
+			// example: T2[2].xyzw
+            tOp.num_indices = 2;
+            num = atoi(s.substr(1, bracketPos).c_str());
+            v.push_back(num);
+            size_t pos2 = s.find(']', bracketPos + 1);
+            num = atoi(s.substr(bracketPos + 1, pos2 - bracketPos - 1).c_str());
+            v.push_back(num);
+        } else {
+			// example: T14[r8.z + 0].xyzw { nonuniform }
+            tOp.num_indices = 2;
+            string sNum = s.substr(1, bracketPos-1);
+            if (!sNum.empty()) {
+                v.push_back(atoi(sNum.c_str()));
+            }
+            size_t bracketClose = s.find(']', bracketPos + 1);
+            string s2 = s.substr(sumPos + 2, bracketClose - sumPos - 2);
+            DWORD idx = atoi(s2.c_str());
+            string s3 = s.substr(bracketPos + 1, sumPos - bracketPos - 2);
+            vector<DWORD> reg = assembleOp(s3);
+            if (idx != 0) {
+                v.push_back(idx);
+                if (!sNum.empty())
+                    tOp.index1_repr = 3; // Reg + imm
+                else
+                    tOp.index0_repr = 3; // Reg + imm
+            } else {
+                if (!sNum.empty())
+                    tOp.index1_repr = 2; // Reg;
+                else
+                    tOp.index0_repr = 2; // Reg;
+            }
+            v.insert(v.end(), reg.begin(), reg.end());
+            dotPos = s.find(".", bracketClose);
+        }
+    } else {
+		// example: T14[0:*]
+        tOp.num_indices = 3;
+        num = atoi(s.substr(1, bracketPos).c_str());
+        v.push_back(num);
+        size_t pos2 = s.find(':', bracketPos + 1);
+        num = atoi(s.substr(bracketPos + 1, pos2 - bracketPos - 1).c_str());
+        v.push_back(num);
+        size_t pos3 = s.find(']', pos2 + 1);
+        string upperBound = s.substr(pos2 + 1, pos3 - pos2 - 1);
+        num = upperBound == "*" ? 0xffffffff : atoi(upperBound.c_str());
+        v.push_back(num);
+        if (dotPos == string::npos) {
+            tOp.mode = 1; // Swizzle
+            tOp.sel = 0xE4;
+            v.insert(v.begin(), op);
+            return v;
+        }
+    }
+    if (dotPos != string::npos) {
+        handleSwizzle(s.substr(dotPos + 1), tOp, special);
+    } else {
+        handleSwizzle("", tOp, special);
+    }
+    v.insert(v.begin(), op);
+    return v;
 }
 
 static vector<string> strToWords(string s)
@@ -833,6 +863,13 @@ static vector<string> strToWords(string s)
 			end = s.find(',', end + 5);
 			if (end != string::npos)
 				end++;
+		}
+
+		// Keep nonuniform tag within the operand.
+		if (end != string::npos && s.compare(end, 15, " { nonuniform }") == 0) {
+            end = s.find(',', end + 15);
+            if (end != string::npos)
+                end++;
 		}
 
 		if (end == string::npos) {
@@ -1176,7 +1213,7 @@ static unordered_map<string, vector<int>> insMap = {
 	{ "utod",                      { 2, 0xd9    } }, // Added and verified -DarkStarSword
 };
 
-static void assembleResourceDeclarationType(string *type, vector<DWORD> *v)
+static void assembleResourceDeclarationType(const string &type, vector<DWORD> &v)
 {
 	// The resource declarations all use the same format strings and
 	// encoding, so do this once, consistently, and handle all confirmed
@@ -1186,27 +1223,28 @@ static void assembleResourceDeclarationType(string *type, vector<DWORD> *v)
 	// more complicated mixed types, which is theoretically possible, but
 	// we've never seen the compiler produce it in practice.
 
-	if (*type == "(float,float,float,float)")
-		v->push_back(0x5555);
-	if (*type == "(uint,uint,uint,uint)")
-		v->push_back(0x4444);
-	if (*type == "(sint,sint,sint,sint)")
-		v->push_back(0x3333);
-	if (*type == "(snorm,snorm,snorm,snorm)")
-		v->push_back(0x2222);
-	if (*type == "(unorm,unorm,unorm,unorm)")
-		v->push_back(0x1111);
-	if (*type == "(double,<continued>,<unused>,<unused>)")
-		v->push_back(0x9987);
-	if (*type == "(double,<continued>,double,<continued>)")
-		v->push_back(0x8787);
-	if (*type == "(mixed,mixed,mixed,mixed)") // TestShaders/GameExamples/DR3/cc5538d28f8fd45e-vs
-		v->push_back(0x6666);
+	if (type == "(float,float,float,float)")
+		v.push_back(0x5555);
+	else if (type == "(uint,uint,uint,uint)")
+		v.push_back(0x4444);
+	else if (type == "(sint,sint,sint,sint)")
+		v.push_back(0x3333);
+	else if (type == "(snorm,snorm,snorm,snorm)")
+		v.push_back(0x2222);
+	else if (type == "(unorm,unorm,unorm,unorm)")
+		v.push_back(0x1111);
+	else if (type == "(double,<continued>,<unused>,<unused>)")
+		v.push_back(0x9987);
+	else if (type == "(double,<continued>,double,<continued>)")
+		v.push_back(0x8787);
+	else if (type == "(mixed,mixed,mixed,mixed)") // TestShaders/GameExamples/DR3/cc5538d28f8fd45e-vs
+		v.push_back(0x6666);
 	// FIXME: Fail gracefully if we don't recognise the type, since doing
 	// nothing here will cause a hang!
+    else v.push_back(0xdead);
 }
 
-static void assembleSystemValue(string *sv, vector<DWORD> *os)
+static void assembleSystemValue(const string &sv, vector<DWORD> &os)
 {
 	// All possible system values used in any of the dcl_*_s?v
 	// declarations (s?v = system value). Not all system values make sense
@@ -1214,53 +1252,54 @@ static void assembleSystemValue(string *sv, vector<DWORD> *os)
 	// but it's not our responsibility to validate that - we just want to
 	// handle all possible cases. -DarkStarSword
 
-	if (*sv == "position")
-		os->push_back(1);
-	else if (*sv == "clip_distance")
-		os->push_back(2);
-	else if (*sv == "cull_distance")
-		os->push_back(3);
-	else if (*sv == "rendertarget_array_index")
-		os->push_back(4);
-	else if (*sv == "viewport_array_index")
-		os->push_back(5);
-	else if (*sv == "vertex_id")
-		os->push_back(6);
-	else if (*sv == "primitive_id")
-		os->push_back(7);
-	else if (*sv == "instance_id")
-		os->push_back(8);
-	else if (*sv == "is_front_face")
-		os->push_back(9);
-	else if (*sv == "sampleIndex")
-		os->push_back(10);
-	else if (*sv == "finalQuadUeq0EdgeTessFactor")
-		os->push_back(11);
-	else if (*sv == "finalQuadVeq0EdgeTessFactor")
-		os->push_back(12);
-	else if (*sv == "finalQuadUeq1EdgeTessFactor")
-		os->push_back(13);
-	else if (*sv == "finalQuadVeq1EdgeTessFactor")
-		os->push_back(14);
-	else if (*sv == "finalQuadUInsideTessFactor")
-		os->push_back(15);
-	else if (*sv == "finalQuadVInsideTessFactor")
-		os->push_back(16);
-	else if (*sv == "finalTriUeq0EdgeTessFactor")
-		os->push_back(17);
-	else if (*sv == "finalTriVeq0EdgeTessFactor")
-		os->push_back(18);
-	else if (*sv == "finalTriWeq0EdgeTessFactor")
-		os->push_back(19);
-	else if (*sv == "finalTriInsideTessFactor")
-		os->push_back(20);
-	else if (*sv == "finalLineDetailTessFactor")
-		os->push_back(21);
-	else if (*sv == "finalLineDensityTessFactor")
-		os->push_back(22);
+	if (sv == "position")
+		os.push_back(1);
+	else if (sv == "clip_distance")
+		os.push_back(2);
+	else if (sv == "cull_distance")
+		os.push_back(3);
+	else if (sv == "rendertarget_array_index")
+		os.push_back(4);
+	else if (sv == "viewport_array_index")
+		os.push_back(5);
+	else if (sv == "vertex_id")
+		os.push_back(6);
+	else if (sv == "primitive_id")
+		os.push_back(7);
+	else if (sv == "instance_id")
+		os.push_back(8);
+	else if (sv == "is_front_face")
+		os.push_back(9);
+	else if (sv == "sampleIndex")
+		os.push_back(10);
+	else if (sv == "finalQuadUeq0EdgeTessFactor")
+		os.push_back(11);
+	else if (sv == "finalQuadVeq0EdgeTessFactor")
+		os.push_back(12);
+	else if (sv == "finalQuadUeq1EdgeTessFactor")
+		os.push_back(13);
+	else if (sv == "finalQuadVeq1EdgeTessFactor")
+		os.push_back(14);
+	else if (sv == "finalQuadUInsideTessFactor")
+		os.push_back(15);
+	else if (sv == "finalQuadVInsideTessFactor")
+		os.push_back(16);
+	else if (sv == "finalTriUeq0EdgeTessFactor")
+		os.push_back(17);
+	else if (sv == "finalTriVeq0EdgeTessFactor")
+		os.push_back(18);
+	else if (sv == "finalTriWeq0EdgeTessFactor")
+		os.push_back(19);
+	else if (sv == "finalTriInsideTessFactor")
+		os.push_back(20);
+	else if (sv == "finalLineDetailTessFactor")
+		os.push_back(21);
+	else if (sv == "finalLineDensityTessFactor")
+		os.push_back(22);
 
 	// FIXME: Fail gracefully if we don't recognise the system value,
 	// otherwise we might generate a corrupt shader and crash DirectX.
+    else os.push_back(0xdead);
 }
 
 static int interpolationMode(vector<string> &w, int def)
@@ -1351,7 +1390,6 @@ static unsigned parseSyncFlags(string *w)
 static void check_num_ops(string &s, vector<string> &w, int min_expected, int max_expected = -1)
 {
 	int num_operands = (int)w.size() - 1;
-	char buf[80];
 
 	// We will throw a parse error if there are too few operands. That
 	// should be relatively uncontroversial, since an exception will have
@@ -1374,10 +1412,8 @@ static void check_num_ops(string &s, vector<string> &w, int min_expected, int ma
 		max_expected = min_expected;
 
 	if (num_operands < min_expected || (max_expected && num_operands > max_expected)) {
-		_snprintf_s(buf, 80, _TRUNCATE,
-			"Invalid number of operands for instruction. Expected %i-%i, found %i",
-			min_expected, max_expected, num_operands);
-		throw AssemblerParseError(s, buf);
+        throw AssemblerParseError(s, std::format("Invalid number of operands for instruction. Expected {}-{}, found {}",
+			min_expected, max_expected, num_operands));
 	}
 }
 
@@ -1420,7 +1456,7 @@ static vector<DWORD> assemble_printf(string &s, vector<DWORD> &v, vector<string>
 {
 	shader_ins ins = {0};
 	ins.opcode = 0x35;
-	ins._11_23 = 0x4;
+	ins.dimension = 0x4;
 	v.push_back(ins.op);
 
 	uint32_t insLen = 0;
@@ -1477,6 +1513,13 @@ static vector<DWORD> assemble_undecipherable_custom_data(string &s, vector<DWORD
 	return v;
 }
 
+static void parseRegisterSpace(vector<DWORD> &os, const std::string &s)
+{
+    if (!s.starts_with("space="))
+        throw AssemblerParseError(s, std::format("Unknown operand for instruction. Expected space=x, found {}", s));
+    os.push_back(atoi(s.substr(6).c_str()));
+}
+
 static vector<DWORD> assembleIns(string s)
 {
 	unsigned msaa_samples = 0;
@@ -1510,13 +1553,13 @@ static vector<DWORD> assembleIns(string s)
 			z = 1024;
 		if (precise.find("w") != string::npos)
 			w = 2048;
-		ins->_11_23 = x | y | z | w;
+		ins->dimension = x | y | z | w;
 	}
 	// Handles _uint variant of resinfo instruction:
 	pos = s.find("_uint");
 	if (pos != string::npos) {
 		s.erase(pos, 5);
-		ins->_11_23 = 2;
+		ins->dimension = 2;
 	}
 	// resinfo_rcpfloat partially verified - assembled & disassembled OK,
 	// but did not check against compiled shader as HLSL lacks an intrinsic
@@ -1527,16 +1570,17 @@ static vector<DWORD> assembleIns(string s)
 	pos = s.find("_rcpfloat");
 	if (pos != string::npos) {
 		s.erase(pos, 9);
-		ins->_11_23 = 1;
+		ins->dimension = 1;
 	}
 	vector<DWORD> v;
 	vector<string> w = strToWords(s);
 	string o = w[0];
-	if (o == "sampleinfo" && ins->_11_23 == 2)
-		ins->_11_23 = 1;
+    if (o == "sampleinfo" && ins->dimension == 2) {
+        ins->dimension = 1;
+    }
 	if (s.find("_opc") < s.size()) {
 		o = o.substr(0, o.find("_opc"));
-		ins->_11_23 = 4096;
+		ins->dimension = 4096;
 	}
 	bool bNZ = o.find("_nz") < o.size();
 	bool bZ = o.find("_z") < o.size();
@@ -1604,7 +1648,7 @@ static vector<DWORD> assembleIns(string s)
 	} else if (w[0].substr(0, 4) == "sync") {
 		ins->opcode = 0xbe;
 		check_num_ops(s, w, 0);
-		ins->_11_23 = parseSyncFlags(&w[0]);
+		ins->dimension = parseSyncFlags(&w[0]);
 		ins->length = 1;
 		v.push_back(op);
 	} else if (w[0] == "store_uav_typed") {
@@ -1636,13 +1680,13 @@ static vector<DWORD> assembleIns(string s)
 			Os.push_back(assembleOp(w[i + 1], i < numSpecial));
 		ins->opcode = vIns[1];
 		if (bSat)
-			ins->_11_23 |= 0x04;
+			ins->dimension |= 0x04;
 		if (bNZ)
-			ins->_11_23 |= 0x80;
+			ins->dimension |= 0x80;
 		if (bZ)
-			ins->_11_23 |= 0x00;
+			ins->dimension |= 0x00;
 		if (bGlc)
-			ins->_11_23 |= 0x20;
+			ins->dimension |= 0x20;
 		ins->length = 1;
 		for (int i = 0; i < numOps; i++)
 			ins->length += (int)Os[i].size();
@@ -1746,167 +1790,183 @@ static vector<DWORD> assembleIns(string s)
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
 	} else if (o == "dcl_resource_buffer") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 1;
-		ins->length = 4;
+		ins->dimension = 1;
+		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texture1d") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 2;
-		ins->length = 4;
+		ins->dimension = 2;
+		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texture1darray") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 7;
-		ins->length = 4;
+		ins->dimension = 7;
+		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_uav_typed_texture1d") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x9c;
-		ins->_11_23 = 2;
+		ins->dimension = 2;
 		if (bGlc)
-			ins->_11_23 |= 0x20;
-		ins->length = 4;
+			ins->dimension |= 0x20;
+		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_uav_typed_texture1darray") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x9c;
-		ins->_11_23 = 7;
+		ins->dimension = 7;
 		if (bGlc)
-			ins->_11_23 |= 0x20;
-		ins->length = 4;
+			ins->dimension |= 0x20;
+		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texture2d") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 3;
-		ins->length = 4;
+		ins->dimension = 3;
+		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_uav_typed_buffer") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x9c;
-		ins->_11_23 = 1;
+		ins->dimension = 1;
 		if (bGlc)
-			ins->_11_23 |= 0x20;
-		ins->length = 4;
+			ins->dimension |= 0x20;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texture3d") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 5;
-		ins->length = 4;
+		ins->dimension = 5;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_uav_typed_texture3d") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x9c;
-		ins->_11_23 = 5;
+		ins->dimension = 5;
 		if (bGlc)
-			ins->_11_23 |= 0x20;
-		ins->length = 4;
+			ins->dimension |= 0x20;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texturecube") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 6;
-		ins->length = 4;
+		ins->dimension = 6;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texturecubearray") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 10;
-		ins->length = 4;
+		ins->dimension = 10;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texture2darray") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x58;
-		ins->_11_23 = 8;
-		ins->length = 4;
+		ins->dimension = 8;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_uav_typed_texture2d") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x9c;
-		ins->_11_23 = 3;
+		ins->dimension = 3;
 		if (bGlc)
-			ins->_11_23 |= 0x20;
-		ins->length = 4;
+			ins->dimension |= 0x20;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_uav_typed_texture2darray") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[2]);
+		assembleResourceDeclarationType(w[1], os);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x9c;
-		ins->_11_23 = 8;
+		ins->dimension = 8;
 		if (bGlc)
-			ins->_11_23 |= 0x20;
-		ins->length = 4;
+			ins->dimension |= 0x20;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[1], &v);
 	} else if (o == "dcl_resource_texture2dms") {
-		check_num_ops(s, w, 3);
+		check_num_ops(s, w, 3, 4);
 		vector<DWORD> os = assembleOp(w[3]);
+		assembleResourceDeclarationType(w[2], os);
+        if (w.size() > 4) parseRegisterSpace(os, w[4]);
 		ins->opcode = 0x58;
 		// Changed this to calculate the value rather than hard coding
 		// a small handful of values that we've seen. -DarkStarSword
 		sscanf_s(w[1].c_str(), "(%d)", &msaa_samples);
-		ins->_11_23 = (msaa_samples << 5) | 4;
-		ins->length = 4;
+		ins->dimension = (msaa_samples << 5) | 4;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[2], &v);
 	} else if (o == "dcl_resource_texture2dmsarray") {
-		check_num_ops(s, w, 3);
+		check_num_ops(s, w, 3, 4);
 		vector<DWORD> os = assembleOp(w[3]);
+		assembleResourceDeclarationType(w[2], os);
+        if (w.size() > 4) parseRegisterSpace(os, w[4]);
 		ins->opcode = 0x58;
 		// Changed this to calculate the value rather than hard coding
 		// a small handful of values that we've seen. -DarkStarSword
 		sscanf_s(w[1].c_str(), "(%d)", &msaa_samples);
-		ins->_11_23 = (msaa_samples << 5) | 9;
-		ins->length = 4;
+		ins->dimension = (msaa_samples << 5) | 9;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		assembleResourceDeclarationType(&w[2], &v);
 	} else if (o == "dcl_indexrange") {
 		check_num_ops(s, w, 2);
 		vector<DWORD> os = assembleOp(w[1], true);
@@ -1922,23 +1982,24 @@ static vector<DWORD> assembleIns(string s)
 		check_num_ops(s, w, 1);
 		v.push_back(atoi(w[1].c_str()));
 	} else if (o == "dcl_resource_structured") {
-		check_num_ops(s, w, 2);
+		check_num_ops(s, w, 2, 3);
 		vector<DWORD> os = assembleOp(w[1]);
-		ins->opcode = 0xa2;
-		ins->length = 4;
+        os.push_back(atoi(w[2].c_str()));
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
+        ins->opcode = 0xa2;
+        ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
-		v.push_back(atoi(w[2].c_str()));
 	} else if (o == "dcl_sampler") {
-		check_num_ops(s, w, 1, 2);
+		check_num_ops(s, w, 1, 3);
 		vector<DWORD> os = assembleOp(w[1]);
-		os[0] = 0x106000;
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x5a;
 		if (w.size() > 2) {
 			if (w[2] == "mode_default") {
-				ins->_11_23 = 0;
+				ins->dimension = 0;
 			} else if (w[2] == "mode_comparison") {
-				ins->_11_23 = 1;
+				ins->dimension = 1;
 			}
 		}
 		ins->length = 1 + os.size();
@@ -1947,7 +2008,7 @@ static vector<DWORD> assembleIns(string s)
 	} else if (o == "dcl_globalFlags") {
 		ins->opcode = 0x6a;
 		ins->length = 1;
-		ins->_11_23 = 0;
+		ins->dimension = 0;
 		for (unsigned i = 1; i < w.size(); i += 2) {
 			// Changed this to use a loop rather than parsing a
 			// fixed number of arguments. Added double precision,
@@ -1961,32 +2022,33 @@ static vector<DWORD> assembleIns(string s)
 			//   -DarkStarSword
 			string s = w[i];
 			if (s == "refactoringAllowed")
-				ins->_11_23 |= 0x01;
+				ins->dimension |= 0x01;
 			if (s == "enableDoublePrecisionFloatOps")
-				ins->_11_23 |= 0x02;
+				ins->dimension |= 0x02;
 			if (s == "forceEarlyDepthStencil")
-				ins->_11_23 |= 0x04;
+				ins->dimension |= 0x04;
 			if (s == "enableRawAndStructuredBuffers")
-				ins->_11_23 |= 0x08;
+				ins->dimension |= 0x08;
 			if (s == "skipOptimization")
-				ins->_11_23 |= 0x10;
+				ins->dimension |= 0x10;
 			if (s == "enableMinimumPrecision")
-				ins->_11_23 |= 0x20;
+				ins->dimension |= 0x20;
 			if (s == "enable11_1DoubleExtensions")
-				ins->_11_23 |= 0x40;
+				ins->dimension |= 0x40;
 			if (s == "enable11_1ShaderExtensions")
-				ins->_11_23 |= 0x80;
+				ins->dimension |= 0x80;
 		}
 		v.push_back(op);
 	} else if (o == "dcl_constantbuffer") {
-		check_num_ops(s, w, 1, 2);
+		check_num_ops(s, w, 1, 3);
 		vector<DWORD> os = assembleOp(w[1]);
+        if (w.size() > 3) parseRegisterSpace(os, w[3]);
 		ins->opcode = 0x59;
 		if (w.size() > 2) {
 			if (w[2] == "dynamicIndexed")
-				ins->_11_23 = 1;
+				ins->dimension = 1;
 			else if (w[2] == "immediateIndexed")
-				ins->_11_23 = 0;
+				ins->dimension = 0;
 		}
 		ins->length = 1 + os.size();
 		v.push_back(op);
@@ -1997,7 +2059,7 @@ static vector<DWORD> assembleIns(string s)
 		check_num_ops(s, w, 2);
 		vector<DWORD> os = assembleOp(w[1], true);
 		ins->opcode = 0x66;
-		assembleSystemValue(&w[2], &os);
+		assembleSystemValue(w[2], os);
 		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
@@ -2005,7 +2067,7 @@ static vector<DWORD> assembleIns(string s)
 		check_num_ops(s, w, 2);
 		vector<DWORD> os = assembleOp(w[1], true);
 		ins->opcode = 0x67;
-		assembleSystemValue(&w[2], &os);
+		assembleSystemValue(w[2], os);
 		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
@@ -2013,7 +2075,7 @@ static vector<DWORD> assembleIns(string s)
 		check_num_ops(s, w, 2);
 		vector<DWORD> os = assembleOp(w[1], true);
 		ins->opcode = 0x61;
-		assembleSystemValue(&w[2], &os);
+		assembleSystemValue(w[2], os);
 		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
@@ -2021,7 +2083,7 @@ static vector<DWORD> assembleIns(string s)
 		check_num_ops(s, w, 2);
 		vector<DWORD> os = assembleOp(w[1], true);
 		ins->opcode = 0x60;
-		assembleSystemValue(&w[2], &os);
+		assembleSystemValue(w[2], os);
 		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
@@ -2030,7 +2092,7 @@ static vector<DWORD> assembleIns(string s)
 		ins->opcode = 0x62;
 		// Switched to use common interpolation mode parsing to catch
 		// more variants -DarkStarSword
-		ins->_11_23 = interpolationMode(w, 0); // FIXME: Default?
+		ins->dimension = interpolationMode(w, 0); // FIXME: Default?
 		os = assembleOp(w[w.size() - 1], true);
 		ins->length = 1 + os.size();
 		v.push_back(op);
@@ -2045,9 +2107,9 @@ static vector<DWORD> assembleIns(string s)
 		check_num_ops(s, w, 2, 5);
 		vector<DWORD> os = assembleOp(w[w.size() - 2], true);
 		ins->opcode = 0x63;
-		ins->_11_23 = interpolationMode(w, 1);
+		ins->dimension = interpolationMode(w, 1);
 		if (w.size() > 2)
-			assembleSystemValue(&w[w.size() - 1], &os);
+			assembleSystemValue(w[w.size() - 1], os);
 		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
@@ -2059,9 +2121,9 @@ static vector<DWORD> assembleIns(string s)
 		// system value parsing (fixes missing viewport_array_index)
 		//   -DarkStarSword
 		check_num_ops(s, w, 2, 5);
-		ins->_11_23 = interpolationMode(w, 0); // FIXME: Default?
+		ins->dimension = interpolationMode(w, 0); // FIXME: Default?
 		os = assembleOp(w[w.size() - 2], true);
-		assembleSystemValue(&w[w.size() - 1], &os);
+		assembleSystemValue(w[w.size() - 1], os);
 		ins->length = 1 + os.size();
 		v.push_back(op);
 		v.insert(v.end(), os.begin(), os.end());
@@ -2080,7 +2142,7 @@ static vector<DWORD> assembleIns(string s)
 	} else if (o == "dcl_immediateConstantBuffer") {
 		vector<DWORD> os;
 		ins->opcode = 0x35;
-		ins->_11_23 = 3;
+		ins->dimension = 3;
 		ins->length = 0;
 		DWORD length = 2;
 		DWORD offset = 3;
@@ -2111,13 +2173,13 @@ static vector<DWORD> assembleIns(string s)
 		ins->length = 1;
 		check_num_ops(s, w, 1);
 		if (w[1] == "partitioning_integer")
-			ins->_11_23 = 1;
+			ins->dimension = 1;
 		else if (w[1] == "partitioning_pow2")
-			ins->_11_23 = 2;
+			ins->dimension = 2;
 		else if (w[1] == "partitioning_fractional_odd")
-			ins->_11_23 = 3;
+			ins->dimension = 3;
 		else if (w[1] == "partitioning_fractional_even")
-			ins->_11_23 = 4;
+			ins->dimension = 4;
 		// Added pow2 -DarkStarSword
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/ff471446(v=vs.85).aspx
 		v.push_back(op);
@@ -2126,13 +2188,13 @@ static vector<DWORD> assembleIns(string s)
 		ins->length = 1;
 		check_num_ops(s, w, 1);
 		if (w[1] == "output_point")
-			ins->_11_23 = 1;
+			ins->dimension = 1;
 		else if (w[1] == "output_line")
-			ins->_11_23 = 2;
+			ins->dimension = 2;
 		else if (w[1] == "output_triangle_cw")
-			ins->_11_23 = 3;
+			ins->dimension = 3;
 		else if (w[1] == "output_triangle_ccw")
-			ins->_11_23 = 4;
+			ins->dimension = 4;
 		// Added output_point -DarkStarSword
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/ff471445(v=vs.85).aspx
 		v.push_back(op);
@@ -2141,11 +2203,11 @@ static vector<DWORD> assembleIns(string s)
 		ins->length = 1;
 		check_num_ops(s, w, 1);
 		if (w[1] == "domain_isoline")
-			ins->_11_23 = 1;
+			ins->dimension = 1;
 		else if (w[1] == "domain_tri")
-			ins->_11_23 = 2;
+			ins->dimension = 2;
 		else if (w[1] == "domain_quad")
-			ins->_11_23 = 3;
+			ins->dimension = 3;
 		v.push_back(op);
 	} else if (o == "dcl_stream") {
 		check_num_ops(s, w, 1);
@@ -2183,11 +2245,11 @@ static vector<DWORD> assembleIns(string s)
 		ins->length = 1;
 		check_num_ops(s, w, 1);
 		if (w[1] == "pointlist")
-			ins->_11_23 = 1;
+			ins->dimension = 1;
 		else if (w[1] == "trianglestrip")
-			ins->_11_23 = 5;
+			ins->dimension = 5;
 		else if (w[1] == "linestrip")
-			ins->_11_23 = 3;
+			ins->dimension = 3;
 		// Added point list -DarkStarSword
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/bb509661(v=vs.85).aspx
 		v.push_back(op);
@@ -2195,14 +2257,14 @@ static vector<DWORD> assembleIns(string s)
 		check_num_ops(s, w, 1);
 		vector<DWORD> os = assembleOp(w[1]);
 		ins->opcode = 0x94;
-		ins->_11_23 = os[0];
+		ins->dimension = os[0];
 		ins->length = 1;
 		v.push_back(op);
 	} else if (o == "dcl_input_control_point_count") {
 		check_num_ops(s, w, 1);
 		vector<DWORD> os = assembleOp(w[1]);
 		ins->opcode = 0x93;
-		ins->_11_23 = os[0];
+		ins->dimension = os[0];
 		ins->length = 1;
 		v.push_back(op);
 	} else if (o == "dcl_maxout") {
@@ -2217,15 +2279,15 @@ static vector<DWORD> assembleIns(string s)
 		ins->length = 1;
 		check_num_ops(s, w, 1);
 		if (w[1] == "point")
-			ins->_11_23 = 1;
+			ins->dimension = 1;
 		else if (w[1] == "line")
-			ins->_11_23 = 2;
+			ins->dimension = 2;
 		else if (w[1] == "triangle")
-			ins->_11_23 = 3;
+			ins->dimension = 3;
 		else if (w[1] == "lineadj")
-			ins->_11_23 = 6;
+			ins->dimension = 6;
 		else if (w[1] == "triangleadj")
-			ins->_11_23 = 7;
+			ins->dimension = 7;
 		// Added "lineadj" -DarkStarSword
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/bb509609(v=vs.85).aspx
 		v.push_back(op);
@@ -2564,51 +2626,6 @@ vector<string> stringToLines(const char* start, size_t size)
 	}
 	return lines;
 }
-static vector<string> stringToLinesDX9(const char* start, size_t size) {
-	vector<string> lines;
-	const char* pStart = start;
-	const char* pEnd = pStart;
-	const char* pRealEnd = pStart + size;
-	while (true) {
-		while (*pEnd != '\n' && pEnd < pRealEnd) {
-			pEnd++;
-		}
-		if (*pStart == 0) {
-			break;
-		}
-		string s(pStart, pEnd++);
-		pStart = pEnd;
-		lines.push_back(s);
-		if (pStart >= pRealEnd) {
-			break;
-		}
-	}
-	for (unsigned int i = 0; i < lines.size(); i++) {
-		string s = lines[i];
-		// Bug fixed: This would not strip carriage returns from DOS
-		// style newlines if they were the only character on the line,
-		// corrupting the resulting shader binary. -DarkStarSword
-		if (s.size() >= 1 && s[s.size() - 1] == '\r')
-			s.erase(--s.end());
-
-		// Strip whitespace from the end of each line. This isn't
-		// strictly necessary, but the MS disassembler inserts an extra
-		// space after "ret ", "else " and "endif ", which has been a
-		// gotcha for trying to match it with ShaderRegex since it's
-		// easy to miss the fact that there is a space there and not
-		// understand why the pattern isn't matching. By removing
-		// excess spaces from the end of each line now we can make this
-		// gotcha go away.
-		while (s.size() >= 1 && s[s.size() - 1] == ' ')
-			s.erase(--s.end());
-
-		while (s.size() >= 1 && s[0] == ' ')
-			s.erase(s.begin());
-
-		lines[i] = s;
-	}
-	return lines;
-}
 
 static void hexdump_instruction(string &s, vector<DWORD> &v,
 		vector<string> &lines, DWORD *i,
@@ -2701,8 +2718,6 @@ int32_t disassembler(vector<uint8_t> *buffer, vector<uint8_t> *ret, const char *
 	chunkOffsets.resize(numChunks);
 	std::memcpy(chunkOffsets.data(), pPosition, 4 * numChunks);
 
-	char* asmBuffer;
-	size_t asmSize;
 	vector<uint8_t> asmBuf;
 	ID3DBlob* pDissassembly = NULL;
 
@@ -2715,8 +2730,8 @@ int32_t disassembler(vector<uint8_t> *buffer, vector<uint8_t> *ret, const char *
 	if (FAILED(ok))
 		return ok;
 
-	asmBuffer = (char*)pDissassembly->GetBufferPointer();
-	asmSize = pDissassembly->GetBufferSize();
+	char* asmBuffer = (char*)pDissassembly->GetBufferPointer();
+    size_t asmSize = pDissassembly->GetBufferSize();
 
 	uint8_t* codeByteStart;
 	int codeChunk = 0;
@@ -2735,13 +2750,11 @@ int32_t disassembler(vector<uint8_t> *buffer, vector<uint8_t> *ret, const char *
 	string s2;
 	vector<DWORD> o;
 	for (DWORD i = 0; i < lines.size(); i++) {
+        if (lines[i].starts_with("//")) {
+            continue;
+		}
 		uint32_t line_byte_offset = (uint32_t)((uint8_t*)codeStart - buffer->data());
 		string s = lines[i];
-
-		if (!memcmp(s.c_str(), "//", 2)) {
-			continue;
-		}
-
 		vector<DWORD> v;
 		if (!codeStarted) {
 			if (s.size() > 0 && s[0] != ' ') {
@@ -2992,8 +3005,7 @@ static vector<DWORD> ComputeHash(uint8_t const* input, DWORD size)
 
 // origByteCode is modified in this function, so passing it by value!
 // asmFile is not modified, so passing it by pointer -DarkStarSword
-vector<uint8_t> assembler(vector<char> *asmFile, vector<uint8_t> origBytecode,
-		vector<AssemblerParseError> *parse_errors)
+std::vector<uint8_t> assembler(const std::string &sourceCode, std::vector<uint8_t> origBytecode, std::list<AssemblerParseError> &parse_errors)
 {
 	uint8_t fourcc[4];
 	DWORD fHash[4];
@@ -3023,8 +3035,8 @@ vector<uint8_t> assembler(vector<char> *asmFile, vector<uint8_t> origBytecode,
 
 	char* asmBuffer;
 	size_t asmSize;
-	asmBuffer = asmFile->data();
-	asmSize = asmFile->size();
+	asmBuffer = (char *)sourceCode.data();
+	asmSize = sourceCode.length();
 	uint8_t* codeByteStart;
 	int codeChunk = 0;
 	for (DWORD i = 1; i <= numChunks; i++) {
@@ -3072,22 +3084,7 @@ vector<uint8_t> assembler(vector<char> *asmFile, vector<uint8_t> origBytecode,
 		} catch (AssemblerParseError &e) {
 			e.line_no = i + 1;
 			e.update_msg();
-
-			// Since we never used to warn about parse errors there
-			// may well be shaders with problems in the wild that
-			// happen to pass anyway (e.g. I've seen at least one
-			// example of someone including the ~~~~~~~~/ line from
-			// the HLSL comment in an assembly shader).
-			//
-			// If the caller has passed somewhere to store the
-			// parse errors we will store them there so that they
-			// can display a warning, but we will continue parsing
-			// the rest of the shader as before. Otherwise we will
-			// throw an exception and stop parsing now.
-			if (!parse_errors)
-				throw;
-
-			parse_errors->push_back(e);
+			parse_errors.emplace_back(e);
 		}
 	}
 	codeStart = (DWORD*)(codeByteStart); // Endian bug, not that we care

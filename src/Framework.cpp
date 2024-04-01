@@ -1,5 +1,6 @@
 #include <chrono>
 #include <filesystem>
+#include <fstream> // :alex:
 
 #include <windows.h>
 #include <ShlObj.h>
@@ -32,6 +33,8 @@
 #include "mods/FrameworkConfig.hpp"
 #include "Framework.hpp"
 
+#include "shader/Shaders.h" // :alex:
+
 namespace fs = std::filesystem;
 using namespace std::literals;
 
@@ -39,6 +42,9 @@ std::unique_ptr<Framework> g_framework{};
 
 // :alex:
 bool Framework::m_dump_shaders = false;
+std::unordered_set<uint64_t> Framework::m_dumped_shaders;
+std::unordered_set<uint64_t> Framework::m_regex_failed_shaders;
+std::list<ShaderRegEx> Framework::m_regex_ps;
 
 UEVRSharedMemory::UEVRSharedMemory() {
     spdlog::info("Shared memory constructor!");
@@ -178,8 +184,8 @@ void Framework::command_thread() {
 
 Framework::Framework(HMODULE framework_module)
     : m_framework_module{framework_module}
-    , m_game_module{GetModuleHandle(0)},
-    m_logger{spdlog::basic_logger_mt("UnrealVR", (get_persistent_dir() / "log.txt").string(), true)} 
+    , m_game_module{GetModuleHandle(0)}
+    , m_logger{spdlog::basic_logger_mt("UnrealVR", (get_persistent_dir() / "log.txt").string(), true)} 
 {
     std::scoped_lock __{m_constructor_mutex};
 
@@ -251,6 +257,79 @@ Framework::Framework(HMODULE framework_module)
 
     // :alex: dump shaders?
     m_dump_shaders = std::filesystem::is_directory(get_persistent_dir("dump"));
+
+    // :alex:
+    std::ifstream regex_ps_file{(get_persistent_dir("shaders") / "RegEx_ps.txt").string()};
+    std::string line;
+    ShaderRegEx regEx{};
+    while (std::getline(regex_ps_file, line)) {
+        line.erase(line.find_last_not_of(" \t\r\v\n") + 1);
+        line.erase(0, line.find_first_not_of(" \t\r\v\n"));
+        if (line.starts_with("//"))
+            continue;
+        auto pos = line.find_first_of('=');
+        if (pos == std::string::npos)
+            continue;
+        std::string cmd = line.substr(0, pos);
+        std::string value = line.substr(pos + 1);
+        cmd.erase(cmd.find_last_not_of(" \t\r\v\n") + 1);
+        value.erase(0, value.find_first_not_of(" \t\r\v\n"));
+        if (cmd.empty() || value.empty())
+            continue;
+        while (value[0] == '"' && (value.length() == 1 || value[value.length() - 1] != '"')) {
+            if (!std::getline(regex_ps_file, line))
+                break;
+            line.erase(line.find_last_not_of(" \t\r\v\n") + 1);
+            line.erase(0, line.find_first_not_of(" \t\r\v\n"));
+            value += line;
+        }
+        if (value[0] == '"')
+            value.erase(0, 1);
+        if (value[value.length() - 1] == '"')
+            value.erase(value.length() - 1);
+        if (cmd == "search")
+            regEx.m_search = value;
+        else if (cmd == "regex.search") {
+            PCRE2_SIZE err_off{};
+            int err{};
+            regEx.m_regex = pcre2_compile((PCRE2_SPTR)value.c_str(),
+                value.length(), // or PCRE2_ZERO_TERMINATED
+                PCRE2_CASELESS | PCRE2_MULTILINE, &err, &err_off, NULL);
+            if (regEx.m_regex == nullptr) {
+                spdlog::error("regex error in \"{:s}\": err={}, pos={}", value, err, err_off);
+                continue;
+            }
+            pcre2_jit_compile(regEx.m_regex, 0);
+        } else if (cmd == "regex.replace") {
+            regEx.m_replacement = value;
+            m_regex_ps.emplace_back(std::move(regEx));
+        } else {
+            spdlog::error("Unknown command {:s} in RegEx file", cmd);
+        }
+    }
+
+    // :alex: some test code
+    /* {
+        auto binFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-ps.bin";
+        std::ifstream binFileStream{binFilePath.string(), std::ios::binary};
+        std::vector<uint8_t> binFileData(std::istreambuf_iterator<char>(binFileStream), {});
+        uint64_t hash = hash_shader(binFileData.data(), binFileData.size());
+
+        std::string original = BinaryToAsmText(binFileData.data(), binFileData.size(), 1);
+        auto origFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-psorig.txt";
+        std::ofstream origFileStream{origFilePath.string(), std::ios::binary | std::ios::trunc};
+        origFileStream.write((const char*)original.data(), original.size());
+
+        std::vector<uint8_t> replacementShader = ReplaceASMShader(hash, "ps", binFileData.data(), binFileData.size());
+        auto outFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-check.bin";
+        std::ofstream outFileStream{outFilePath.string(), std::ios::binary | std::ios::trunc};
+        outFileStream.write((const char*)replacementShader.data(), replacementShader.size());
+
+        std::string reconstructed = BinaryToAsmText(replacementShader.data(), replacementShader.size(), 1);
+        auto checkFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-check.txt";
+        std::ofstream checkFileStream{checkFilePath.string(), std::ios::binary | std::ios::trunc};
+        checkFileStream.write((const char*)reconstructed.data(), reconstructed.size());
+    } */
 
     // :alex: hook & unhook D3D11 with permanent shader hook to catch all early shader creations
     if (!hook_d3d11()) {
