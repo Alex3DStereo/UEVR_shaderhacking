@@ -606,6 +606,11 @@ public:
         return m_grow_rectangle_for_projection_cropping->value();
     }
 
+    // :alex:
+    bool shader_hunting() const { 
+        return m_shader_hunting->value(); 
+    }
+
     vrmod::D3D11Component& d3d11() {
         return m_d3d11;
     }
@@ -936,6 +941,9 @@ private:
     
     const ModString::Ptr m_requested_runtime_name{ ModString::create("Frontend_RequestedRuntime", "unset") };
 
+    // :alex:
+    const ModToggle::Ptr m_shader_hunting{ModToggle::create(generate_name("ShaderHunting"), false)};
+
     struct DecoupledPitchData {
         mutable std::shared_mutex mtx{};
         glm::quat pre_flattened_rotation{};
@@ -1038,6 +1046,7 @@ private:
         *m_show_fps,
         *m_show_statistics,
         *m_controllers_allowed,
+        *m_shader_hunting,          // :alex:
     };
     
 

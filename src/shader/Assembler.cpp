@@ -727,7 +727,7 @@ static vector<DWORD> assembleOp(string s, bool special)
 		tOp.file = 7;
 	} else if (s[0] == 'g') {
 		tOp.file = 0x1F;
-	} else if (s[0] == 'u') {
+	} else if (s[0] == 'u' || s[0] == 'U') {
 		tOp.file = 0x1E;
 	} else if (s[0] == 'm') {
 		tOp.file = 0x10;

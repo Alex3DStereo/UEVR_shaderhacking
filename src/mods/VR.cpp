@@ -2587,6 +2587,9 @@ void VR::on_draw_sidebar_entry(std::string_view name) {
         ImGui::DragFloat2("Right Stick", (float*)&right_stick_axis, 0.01f, -1.0f, 1.0f);
 
         ImGui::TextWrapped("Hardware scheduling: %s", m_has_hw_scheduling ? "Enabled" : "Disabled");
+
+        // :alex:
+        m_shader_hunting->draw("Shader Hunting");
     }
 
     ImGui::EndGroup();

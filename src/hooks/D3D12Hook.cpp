@@ -702,9 +702,9 @@ HRESULT WINAPI D3D12Hook::create_graphics_pipeline_state(ID3D12Device4* device, 
         // dump unknown shader?
         if (Framework::shader_dump_enabled() && (Framework::m_dumped_shaders.find(hash) == Framework::m_dumped_shaders.end())) {
             Framework::m_dumped_shaders.insert(hash);
-            const auto dumpPath = Framework::getShaderPath(hash, "ps", "dump");
+            const auto dumpPath = Framework::getShaderPath(hash, "ps", "txt", "dump");
             if (!std::filesystem::exists(dumpPath)) {
-                std::fstream outfile(dumpPath.string(), std::ios_base::out);
+                std::fstream outfile(dumpPath.string(), std::ios_base::out | std::ios_base::trunc);
                 outfile << BinaryToAsmText(pDesc->PS.pShaderBytecode, pDesc->PS.BytecodeLength, false);
             }
         }
@@ -768,25 +768,24 @@ HRESULT WINAPI D3D12Hook::create_pipeline_state(ID3D12Device4* device, const D3D
             if (desc_shader->pShaderBytecode != nullptr) {
                 pixelShaderHash = hash_shader(desc_shader->pShaderBytecode, desc_shader->BytecodeLength);
                 // dump shader
-                //const auto dumpBin = Framework::getShaderPath(pixelShaderHash, "psbin", "dump");
-                //if (!std::filesystem::exists(dumpBin)) {
-                //    std::fstream outfile(dumpBin.string(), std::ios_base::out | std::ios_base::binary);
-                //    outfile.write((const char*)desc_shader->pShaderBytecode, desc_shader->BytecodeLength);
-                //}
-                std::vector<uint8_t> replacementShader = ReplaceASMShader(pixelShaderHash, "ps", desc_shader->pShaderBytecode, desc_shader->BytecodeLength); 
-                if (replacementShader.empty()) {
-                    // dump unknown shader?
-                    if (Framework::shader_dump_enabled() && (Framework::m_dumped_shaders.find(pixelShaderHash) == Framework::m_dumped_shaders.end())) {
-                        Framework::m_dumped_shaders.insert(pixelShaderHash);
-                        const auto dumpPath = Framework::getShaderPath(pixelShaderHash, "ps", "dump");
-                        if (!std::filesystem::exists(dumpPath)) {
-                            std::fstream outfile(dumpPath.string(), std::ios_base::out | std::ios_base::binary);
-                            outfile << BinaryToAsmText(desc_shader->pShaderBytecode, desc_shader->BytecodeLength, false);
-                        }
+                if (Framework::shader_dump_enabled() && (Framework::m_dumped_shaders.find(pixelShaderHash) == Framework::m_dumped_shaders.end())) {
+                    Framework::m_dumped_shaders.insert(pixelShaderHash);
+                    // dump binary
+                    const auto dumpBin = Framework::getShaderPath(pixelShaderHash, "ps", "bin", "dump");
+                    if (!std::filesystem::exists(dumpBin)) {
+                        std::fstream outfile(dumpBin.string(), std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+                        outfile.write((const char*)desc_shader->pShaderBytecode, desc_shader->BytecodeLength);
+                    }
+                    // dump disassembly
+                    const auto dumpPath = Framework::getShaderPath(pixelShaderHash, "ps", "txt", "dump");
+                    if (!std::filesystem::exists(dumpPath)) {
+                        std::fstream outfile(dumpPath.string(), std::ios_base::out | std::ios_base::trunc);
+                        outfile << BinaryToAsmText(desc_shader->pShaderBytecode, desc_shader->BytecodeLength, false);
                     }
                 }
-                else
-                {
+                // replace shader
+                std::vector<uint8_t> replacementShader = ReplaceASMShader(pixelShaderHash, "ps", desc_shader->pShaderBytecode, desc_shader->BytecodeLength); 
+                if (!replacementShader.empty()) {
                     auto &data = replacementShaders.emplace_back(std::move(replacementShader));
                     desc_shader->pShaderBytecode = data.data();
                     desc_shader->BytecodeLength = data.size();
@@ -857,15 +856,16 @@ HRESULT WINAPI D3D12Hook::create_pipeline_state(ID3D12Device4* device, const D3D
 
 HRESULT WINAPI D3D12Hook::create_pipeline_library(ID3D12Device4* device, const void* pLibraryBlob, SIZE_T BlobLength, REFIID riid, void** ppPipelineLibrary)
 {
+    std::scoped_lock _{g_framework->get_hook_monitor_mutex()};
+
     spdlog::info("D3D12Hook::create_pipeline_library called with blob size={}", BlobLength);
     auto d3d12 = g_d3d12_hook;
     auto create_pipeline_library_fn = d3d12->m_create_pipeline_library_hook->get_original<decltype(D3D12Hook::create_pipeline_library)*>();
 
     // invalidate a cached library to force reloading of all shaders
-    if (pLibraryBlob != nullptr && BlobLength != 0)
-    {
+    if (pLibraryBlob != nullptr && BlobLength != 0) {
         *ppPipelineLibrary = nullptr;
-        return E_INVALIDARG;                // E_INVALIDARG if the blob is corrupted or unrecognized.
+        return D3D12_ERROR_DRIVER_VERSION_MISMATCH;     // Signals a depricated shader cache which will trigger a recreation.
     }
 
     // forwarding for empty library creation

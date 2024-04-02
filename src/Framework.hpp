@@ -130,7 +130,7 @@ public:
         return get_persistent_dir() / dir;
     }
 
-    static std::filesystem::path getShaderPath(uint64_t hash, const char* pShaderType, const std::string& subfolder); // :alex:
+    static std::filesystem::path getShaderPath(uint64_t hash, const char* pShaderType, const char *extension, const std::string& subfolder); // :alex:
 
     // :alex:
     static std::unordered_set<uint64_t> m_dumped_shaders;

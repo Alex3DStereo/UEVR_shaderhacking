@@ -310,23 +310,24 @@ Framework::Framework(HMODULE framework_module)
 
     // :alex: some test code
     /* {
-        auto binFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-ps.bin";
+        std::string shaderHash = "d20bc1573401ba8a";
+        auto binFilePath = get_persistent_dir("shaders") / (shaderHash + "-psin.bin");
         std::ifstream binFileStream{binFilePath.string(), std::ios::binary};
         std::vector<uint8_t> binFileData(std::istreambuf_iterator<char>(binFileStream), {});
         uint64_t hash = hash_shader(binFileData.data(), binFileData.size());
 
         std::string original = BinaryToAsmText(binFileData.data(), binFileData.size(), 1);
-        auto origFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-psorig.txt";
+        auto origFilePath = get_persistent_dir("shaders") / (shaderHash + "-psorig.txt");
         std::ofstream origFileStream{origFilePath.string(), std::ios::binary | std::ios::trunc};
         origFileStream.write((const char*)original.data(), original.size());
 
         std::vector<uint8_t> replacementShader = ReplaceASMShader(hash, "ps", binFileData.data(), binFileData.size());
-        auto outFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-check.bin";
+        auto outFilePath = get_persistent_dir("shaders") / (shaderHash + "-check.bin");
         std::ofstream outFileStream{outFilePath.string(), std::ios::binary | std::ios::trunc};
         outFileStream.write((const char*)replacementShader.data(), replacementShader.size());
 
         std::string reconstructed = BinaryToAsmText(replacementShader.data(), replacementShader.size(), 1);
-        auto checkFilePath = get_persistent_dir("shaders") / "a9740f3e52a07eec-check.txt";
+        auto checkFilePath = get_persistent_dir("shaders") / (shaderHash + "-check.txt");
         std::ofstream checkFileStream{checkFilePath.string(), std::ios::binary | std::ios::trunc};
         checkFileStream.write((const char*)reconstructed.data(), reconstructed.size());
     } */
@@ -2122,9 +2123,9 @@ Framework::ImGuiThemes Framework::get_imgui_theme_value() const {
 }
 
 // :alex:
-std::filesystem::path Framework::getShaderPath(const uint64_t hash, const char* pShaderType, const std::string& subfolder)
+std::filesystem::path Framework::getShaderPath(const uint64_t hash, const char* pShaderType, const char *extension, const std::string& subfolder)
 {
     char path[MAX_PATH];
-    sprintf(path, "%016llx-%s.txt", hash, pShaderType);
+    sprintf(path, "%016llx-%s.%s", hash, pShaderType, extension);
     return Framework::get_persistent_dir(subfolder) / path;
 }

@@ -755,7 +755,7 @@ std::string BinaryToAsmText(const void* pShaderBytecode, size_t BytecodeLength, 
 std::vector<uint8_t> ReplaceASMShader(const uint64_t hash, const char* pShaderType, const void* pShaderBytecode, uint64_t BytecodeLength)
 {
     std::vector<uint8_t> replacementShader;
-    const std::filesystem::path final_path = Framework::getShaderPath(hash, pShaderType, "shaders").string();
+    const std::filesystem::path final_path = Framework::getShaderPath(hash, pShaderType, "txt", "shaders").string();
 
 	// matching shader replacement file available?
     std::ifstream f{final_path.string()};
@@ -791,9 +791,9 @@ std::vector<uint8_t> ReplaceASMShader(const uint64_t hash, const char* pShaderTy
     if (!Framework::m_regex_ps.empty()) {
         std::string disasm{BinaryToAsmText(pShaderBytecode, BytecodeLength, false)};
         if (Framework::m_regex_failed_shaders.find(hash) == Framework::m_regex_failed_shaders.end()) {
-            std::string replacementSource;
+            bool modified = false;
             for (auto& regEx : Framework::m_regex_ps) {
-                if (disasm.find_first_of(regEx.m_search) == std::string::npos)
+                if (disasm.find(regEx.m_search) == std::string::npos)
                     continue;
                 // At a minimum we want \n to be translated in the replace string, which needs extended substitution processing to be
                 // enabled.
@@ -812,20 +812,35 @@ std::vector<uint8_t> ReplaceASMShader(const uint64_t hash, const char* pShaderTy
                     // not found
                     continue;
                 }
-                replacementSource.swap(buf);
-                break;
+                buf.resize(output_size);
+                disasm.swap(buf);
+                modified = true;
             }
-            if (!replacementSource.empty()) {
+            if (modified) {
+                if (Framework::shader_dump_enabled()) {
+                    const auto dumpPath = Framework::getShaderPath(hash, "ps_replace", "txt", "dump");
+                    if (!std::filesystem::exists(dumpPath)) {
+                        std::fstream outfile(dumpPath.string(), std::ios_base::out | std::ios_base::trunc);
+                        outfile << disasm;
+                    }
+                }
                 // Assemble to binary
                 try {
                     std::list<AssemblerParseError> parse_errors;
                     std::vector<uint8_t> origByteCode(BytecodeLength);
                     memcpy(origByteCode.data(), pShaderBytecode, BytecodeLength);
-                    replacementShader = AssembleFluganWithOptionalSignatureParsing(replacementSource, true, origByteCode, parse_errors);
+                    replacementShader = AssembleFluganWithOptionalSignatureParsing(disasm, true, origByteCode, parse_errors);
                     for (auto& parse_error : parse_errors) {
                         spdlog::warn("{}: {}", final_path.filename().string(), parse_error.what());
                     }
                     if (!replacementShader.empty()) {
+                        if (Framework::shader_dump_enabled()) {
+                            const auto dumpBin = Framework::getShaderPath(hash, "ps_replace", "bin", "dump");
+                            if (!std::filesystem::exists(dumpBin)) {
+                                std::fstream outfile(dumpBin.string(), std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+                                outfile.write((const char*)replacementShader.data(), replacementShader.size());
+                            }
+                        }
                         return replacementShader;
                     }
                 } catch (const exception& e) {

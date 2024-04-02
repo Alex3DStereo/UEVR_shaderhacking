@@ -335,9 +335,9 @@ HRESULT WINAPI D3D11Hook::create_pixel_shader(ID3D11Device* device, const void* 
         // dump unknown shader?
         if (Framework::shader_dump_enabled() && (Framework::m_dumped_shaders.find(hash) == Framework::m_dumped_shaders.end())) {
             Framework::m_dumped_shaders.insert(hash);
-            const auto dumpPath = Framework::getShaderPath(hash, "ps", "dump");
+            const auto dumpPath = Framework::getShaderPath(hash, "ps", "txt", "dump");
             if (!std::filesystem::exists(dumpPath)) {
-                fstream outfile(dumpPath.string(), std::ios_base::out);
+                fstream outfile(dumpPath.string(), std::ios_base::out | std::ios_base::trunc);
                 outfile << BinaryToAsmText(pShaderBytecode, BytecodeLength, false);                
             }
         }
